@@ -5,6 +5,13 @@ copyright 2026 wushuai0802. Each third-party component retains its own license.
 Versions 1.3.4 and earlier were released under MIT; the change applies from
 the next release and does not relicense those published versions.
 
+The Windows taskbar renderer in `native/batteryhub` is based on
+[BatteryHub](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/tree/fd2267d770c9dafc46047f715e79da525e3fecf4),
+commit `fd2267d770c9dafc46047f715e79da525e3fecf4` (GPL-3.0).
+The BatteryHub portions retain GPL-3.0. Its license is included in
+`native/batteryhub/COPYING` and in the Windows ZIP as `BatteryHub-COPYING.txt`.
+MyFinder supplies the existing battery data and handles clicks and notifications.
+
 The battery-query modules under `engine/providers` are adapted from
 [HeyOkay/HaloBattery](https://github.com/HeyOkay/HaloBattery), commit
 `2251f0534a8e886c9692ead42056059b4f69d8c0` (MIT).

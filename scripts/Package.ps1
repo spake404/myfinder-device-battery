@@ -15,6 +15,8 @@ $info=Get-Content -LiteralPath $buildInfoPath -Raw -Encoding UTF8 | ConvertFrom-
 if($info.schema -ne 2 -or $info.version -cne $release.version -or
     $info.releaseSha256 -ine (Get-FileHash -LiteralPath (Join-Path $root 'release.json') -Algorithm SHA256).Hash) {throw 'Build metadata does not match this release.'}
 if(@($info.sources | Where-Object {$_.path -ceq 'assets/app-icon.ico'}).Count -ne 1){throw 'Build metadata does not include the application icon. Build again before packaging.'}
+if(@($info.sources | Where-Object {$_.path -ceq 'assets/app.manifest'}).Count -ne 1){throw 'Build metadata does not include the application manifest. Build again before packaging.'}
+if(@($info.files | Where-Object {$_.path -ceq 'MyFinderTaskbar.dll'}).Count -ne 1){throw 'Build metadata does not include the taskbar renderer. Build again before packaging.'}
 foreach($entry in @($info.files)) {
     $file=Resolve-DeviceBatteryPayloadPath $BuildDirectory $entry.path
     if(-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ine $entry.sha256){throw 'Built binaries changed after validation.'}
@@ -30,7 +32,8 @@ if((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)){throw 'Pac
 $runtime=Join-Path $root 'engine\runtime'
 $null=& (Join-Path $PSScriptRoot 'Build-Backend.ps1') -OutputDirectory $runtime
 New-Item -ItemType Directory -Path (Join-Path $stage 'outputs'),(Join-Path $stage 'scripts') -Force|Out-Null
-foreach($file in @('AtkMouseBattery.exe','AtkBatteryProbe.exe')){Copy-Item -LiteralPath (Join-Path $BuildDirectory $file) -Destination (Join-Path $stage 'outputs')}
+foreach($file in @('AtkMouseBattery.exe','AtkBatteryProbe.exe','MyFinderTaskbar.dll')){Copy-Item -LiteralPath (Join-Path $BuildDirectory $file) -Destination (Join-Path $stage 'outputs')}
+Copy-Item -LiteralPath (Join-Path $root 'native\batteryhub\COPYING') -Destination (Join-Path $stage 'BatteryHub-COPYING.txt')
 foreach($file in @('Install.Common.ps1','Manifest.Common.ps1','Install-Startup.ps1','Uninstall-Startup.ps1','Start.ps1','Apply-Update.ps1','Update.Common.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stage 'scripts')}
 foreach($file in @('README.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md','LICENSE','release.json')){Copy-Item -LiteralPath (Join-Path $root $file) -Destination $stage}
 Copy-Item -LiteralPath $buildInfoPath -Destination (Join-Path $stage 'build-info.json')

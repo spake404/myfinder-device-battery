@@ -29,7 +29,7 @@ namespace AtkBatteryTray {
             if(selected==null&&available.Count>0){selected=available[0];foreach(var card in available)if(card.Battery.Fresh&&card.Battery.Percent.HasValue){selected=card;break;}}
             return selected;
         }
-        internal static TrayView Present(List<WirelessCard> candidates,WirelessCard selected,string groupName=null){
+        internal static TrayView Present(List<WirelessCard> candidates,WirelessCard selected,string groupName=null,string brandMode=null){
             var battery=selected==null?new BatteryView {Name="无线设备"}:selected.Battery;
             string tooltip;
             if(groupName!=null){
@@ -43,34 +43,46 @@ namespace AtkBatteryTray {
                 foreach(var card in candidates){if(card==selected)continue;text.Append(extra?" | ":"\n").Append(card.Battery.TooltipFor(card.Name));extra=true;}
                 tooltip=text.ToString();if(tooltip.Length>63)tooltip=Fit(tooltip,63);
             }
-            return new TrayView {Battery=battery,Tooltip=tooltip,DeviceKind=selected==null?"device":selected.Kind};
+            var view=new TrayView {Battery=battery,Tooltip=tooltip,DeviceKind=selected==null?"device":selected.Kind};
+            if(selected!=null){
+                var device=selected.Device;
+                view.BrandAccent=TrayBrand.Resolve(brandMode,device==null?(selected.NativeHeadset?"hyperx":null):device.Provider,
+                    device==null?null:device.VendorId,device==null?null:device.Name,selected.Kind);
+            }
+            return view;
         }
         static string Fit(string value,int length){value=value??"无线设备";if(value.Length<=length)return value;int take=Math.Max(0,length-1);if(take>0&&Char.IsHighSurrogate(value[take-1]))take--;return value.Substring(0,take)+"…";}
     }
     internal interface ITrayIcon:IDisposable {
-        bool Update(TrayView view,string style,bool dark,int size);
+        bool Update(TrayView view,bool dark,int size);
         void Recreate();
+        void Suppress(bool value);
     }
     internal sealed class NativeTrayIcon:ITrayIcon {
         readonly NotifyIcon tray;readonly bool visible;
         Icon icon;string lastKey,lastTooltip;
+        bool suppressed, balloon;
         [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
         internal NativeTrayIcon(NotifyIcon tray,bool visible){this.tray=tray;this.visible=visible;}
-        public bool Update(TrayView view,string style,bool dark,int size){
+        public bool Update(TrayView view,bool dark,int size){
             var battery=view.Battery;bool taskbarDark=Style.TaskbarDark;
-            string key=battery.Key+"|"+style+"|"+view.DeviceKind+"|"+dark+"|"+size+"|"+view.UpdateBadge+"|"+(view.UpdateBadge?view.UpdateColor.ToArgb():0)+"|"+taskbarDark;bool changed=key!=lastKey;
+            string key=battery.Key+"|"+view.DeviceKind+"|"+view.BrandAccent+"|"+dark+"|"+size+"|"+view.UpdateBadge+"|"+(view.UpdateBadge?view.UpdateColor.ToArgb():0)+"|"+taskbarDark;bool changed=key!=lastKey;
             if(changed){
                 Color? badge=view.UpdateBadge?(Color?)view.UpdateColor:null;
-                using(var bitmap=style=="device"?TrayGlyph.RenderDevice(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,view.DeviceKind,badge,taskbarDark):TrayGlyph.Render(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,battery.Approximate,badge,taskbarDark)){
+                using(var bitmap=TrayGlyph.RenderDevice(battery.Percent,battery.Charging,dark,battery.Percent.HasValue&&!battery.Fresh,size,view.DeviceKind,badge,taskbarDark,TrayBrand.ColorFor(view.BrandAccent,!taskbarDark))){
                     IntPtr handle=bitmap.GetHicon();Icon next;try{next=(Icon)Icon.FromHandle(handle).Clone();}finally{DestroyIcon(handle);}
                     var old=icon;icon=next;tray.Icon=icon;if(old!=null)old.Dispose();
                 }
                 lastKey=key;
             }
             if(view.Tooltip!=lastTooltip){tray.Text=view.Tooltip;lastTooltip=view.Tooltip;}
-            tray.Visible=visible;return changed;
+            ApplyVisibility();return changed;
         }
-        public void Recreate(){tray.Visible=false;tray.Visible=visible&&icon!=null;}
+        void ApplyVisibility(){tray.Visible=visible&&icon!=null&&(!suppressed||balloon);}
+        public void Suppress(bool value){suppressed=value;ApplyVisibility();}
+        internal void ShowBalloon(string title,string text,ToolTipIcon type){balloon=true;ApplyVisibility();tray.ShowBalloonTip(5000,title,text,type);}
+        internal void EndBalloon(){balloon=false;ApplyVisibility();}
+        public void Recreate(){tray.Visible=false;ApplyVisibility();}
         public void Dispose(){tray.Visible=false;tray.Dispose();if(icon!=null){icon.Dispose();icon=null;}}
     }
     // Owns the original icon for its entire lifetime. Only changed IDs are created
@@ -80,12 +92,16 @@ namespace AtkBatteryTray {
         readonly Func<string,ITrayIcon> factory;
         readonly Dictionary<string,ITrayIcon> extras=new Dictionary<string,ITrayIcon>(StringComparer.Ordinal);
         bool disposed;
+        bool suppressed;
         internal TrayIconSet(ITrayIcon first,Func<string,ITrayIcon> create){First=first;factory=create;}
         internal void Sync(IEnumerable<TrayGroup> groups){
             if(disposed)return;var ids=new HashSet<string>(StringComparer.Ordinal);foreach(var group in groups)ids.Add(group.Id);
             foreach(string id in new List<string>(extras.Keys))if(!ids.Contains(id)){extras[id].Dispose();extras.Remove(id);}
-            foreach(var group in groups)if(!extras.ContainsKey(group.Id))extras.Add(group.Id,factory(group.Id));
+            foreach(var group in groups)if(!extras.ContainsKey(group.Id)){
+                var icon=factory(group.Id);icon.Suppress(suppressed);extras.Add(group.Id,icon);
+            }
         }
+        internal void SuppressAll(bool value){suppressed=value;First.Suppress(value);foreach(var icon in extras.Values)icon.Suppress(value);}
         internal ITrayIcon For(string id){return id==TrayConfiguration.FirstId?First:extras[id];}
         internal void RecreateAll(){if(disposed)return;First.Recreate();foreach(var icon in extras.Values)icon.Recreate();}
         public void Dispose(){if(disposed)return;disposed=true;First.Dispose();foreach(var icon in extras.Values)icon.Dispose();extras.Clear();}

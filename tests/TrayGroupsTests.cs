@@ -36,14 +36,18 @@ static class TrayGroupsTests {
     static AudioBindings Load(string fields){string path=Path.Combine(output,"tray-settings.json");File.WriteAllText(path,"{\"SchemaVersion\":1,\"Theme\":\"dark\",\"MouseAlias\":\"保留名字\",\"WarningThreshold\":15,\"TraySource\":\"keyboard\",\"TrayDeviceId\":\"legacy-pin\""+fields+"}");return DeviceSettings.LoadBindings(path);}
     static void Kept(AudioBindings pref){Check(pref.Theme=="dark"&&pref.MouseAlias=="保留名字"&&pref.WarningThreshold==15&&pref.TraySource=="keyboard"&&pref.TrayDeviceId=="legacy-pin","new field validation preserves unrelated and legacy first-group settings");}
     static void Configuration(){
-        var old=Load("");Kept(old);Check(old.TrayGroups.Count==0&&old.TrayIconStyle=="number","old configuration means one numeric icon");
+        var old=Load("");Kept(old);Check(old.TrayGroups.Count==0&&old.TrayIconStyle==TrayConfiguration.IconPreset,"old configuration means one icon with the unified preset");
+        foreach(string style in new[]{"number","device"}){
+            var migrated=Load(",\"TrayIconStyle\":\""+style+"\"");Kept(migrated);
+            Check(migrated.TrayIconStyle==TrayConfiguration.IconPreset,"legacy style uses the unified preset: "+style);
+        }
         var pref=Load(",\"TrayGroups\":[{\"Id\":\"g2\",\"Name\":\" A\\u0001B \",\"Source\":\"wrong\",\"DeviceId\":\"bad\\n\",\"Members\":[\"one\",\"one\",null,42,\"two\",\"bad\\n\"]},{\"Id\":\"g3\",\"Name\":\"123456789012345\",\"Source\":\"active\",\"Members\":[\"one\",\"three\"]},{\"Id\":\"g4\",\"Name\":\"\\u0001\",\"Members\":[\"four\"]},{\"Id\":\"g5\",\"Members\":[\"five\"]}],\"TrayIconStyle\":\"future\"");
-        Kept(pref);Check(pref.TrayGroups.Count==3&&pref.TrayIconStyle=="number","excess groups and unknown style are handled locally");
+        Kept(pref);Check(pref.TrayGroups.Count==3&&pref.TrayIconStyle==TrayConfiguration.IconPreset,"excess groups and unknown style are handled locally");
         Check(pref.TrayGroups[0].Name=="AB"&&pref.TrayGroups[0].Source=="lowest"&&pref.TrayGroups[0].DeviceId==null,"control characters, invalid rule and invalid fixed ID are sanitized");
         Check(String.Join(",",pref.TrayGroups[0].Members.ToArray())=="one,two"&&String.Join(",",pref.TrayGroups[1].Members.ToArray())=="three","earlier groups own duplicate members");
         Check(pref.TrayGroups[1].Name.Length==12&&pref.TrayGroups[2].Name=="托盘图标 4","long and empty group names remain valid");
         foreach(string field in new[]{",\"TrayGroups\":true,\"TrayIconStyle\":{}",",\"TrayGroups\":[null,4,[],{\"Id\":4},{\"Id\":\"g1\"},{\"Id\":\"ok\",\"Name\":[],\"Source\":{},\"Members\":false,\"DeviceId\":[]},{\"Id\":\"ok\"},{\"Id\":\"later\",\"Members\":[\"valid\",{}]}],\"TrayIconStyle\":false"}){
-            var malformed=Load(field);Kept(malformed);Check(malformed.TrayIconStyle=="number","wrong JSON style type defaults locally");
+            var malformed=Load(field);Kept(malformed);Check(malformed.TrayIconStyle==TrayConfiguration.IconPreset,"wrong JSON style type defaults locally");
             if(malformed.TrayGroups.Count>0)Check(malformed.TrayGroups.Count==2&&malformed.TrayGroups[0].Members.Count==0&&malformed.TrayGroups[1].Members[0]=="valid","invalid groups and fields do not discard later valid groups");
         }
         var clone=pref.Clone();clone.TrayGroups[0].Members.Add("copy-only");Check(!pref.TrayGroups[0].Members.Contains("copy-only"),"group clones do not share member lists");
@@ -91,6 +95,111 @@ static class TrayGroupsTests {
         Check(TraySelection.Select(new[]{unknown,history},"lowest",null,null,false,null,true)==history,"historical readings beat absent readings when no current reading exists");
         Check(TraySelection.Select(new[]{keyboard},"mouse",null,null,false,null)==keyboard,"a missing legacy device type retains the existing fallback");
     }
+    static void TaskbarReadings(){
+        using(var fixture=new Fixture()){
+            var preferences=DeviceSettings.Current;
+            preferences.TraySource="mouse";
+            Func<List<TrayView>> viewsForSettings=delegate {
+                DeviceSettings.UseTransientConfiguration(preferences);
+                return fixture.Owner.BuildTrayViews(DeviceSettings.Current,new BatteryView(),new BatteryView());
+            };
+            var views=viewsForSettings();
+            Check(views.Count==1&&views[0].DeviceKind=="mouse","one tray group shows only the selected mouse");
+            var group=TrayConfiguration.Add(preferences);
+            views=viewsForSettings();
+            Check(views.Count==2&&TaskbarStrip.Reading.FromView(views[1],20).Percent==-1,"an empty configured group keeps an unknown slot");
+            TrayConfiguration.Move(preferences,"headset",group.Id);
+            group.DeviceId="headset";
+            views=viewsForSettings();
+            Check(views.Count==2&&views[0].DeviceKind=="mouse"&&views[1].DeviceKind=="headset", "a pinned headset appears as the second slot");
+            string settingsPath=Path.Combine(output,"taskbar-groups-roundtrip.json");
+            DeviceSettings.SaveBindings(settingsPath,preferences);
+            preferences=DeviceSettings.LoadBindings(settingsPath);
+            views=viewsForSettings();
+            Check(views.Count==2&&views[1].DeviceKind=="headset","loaded preferences preserve the headset slot");
+            TrayConfiguration.Remove(preferences,group.Id);
+            views=viewsForSettings();
+            Check(views.Count==1&&views[0].DeviceKind=="mouse","deleting the second group removes its taskbar slot");
+            preferences.TraySource="headset";
+            views=viewsForSettings();
+            Check(views.Count==1&&views[0].DeviceKind=="headset","changing the first group's rule replaces its displayed device");
+        }
+    }
+    static void BrandColors(){
+        if(File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"MyFinderTaskbar.dll"))){
+            Check(TrayBrand.Resolve("auto","logitech",0x1532,"Razer Mouse","mouse")==2,"a recognized reader takes priority over the VID and name");
+            Check(TrayBrand.Resolve("auto","generic_hid",0x1532,"Wireless Mouse","mouse")==1,"a recognized vendor takes priority over the name");
+            Check(TrayBrand.Resolve("auto","bluetooth",null,"MX Master 3S","mouse")==2,"automatic color falls back to the original product name");
+            Check(TrayBrand.Resolve("auto","generic_hid",0x045E,"Surface Mouse","mouse")==0,"a shared Microsoft VID does not color a Surface mouse as Xbox");
+            Check(TrayBrand.Resolve("auto","generic_hid",0x054C,"WH-1000XM5","headset")==0,"Sony headphones are not treated as PlayStation gear");
+            Check(TrayBrand.Resolve("corsair","razer",0x1532,"Razer Mouse","mouse")==4,"a manual color overrides the detected brand");
+            var light=TrayBrand.ColorFor(1,true);var dark=TrayBrand.ColorFor(1,false);
+            Check(light==Color.FromArgb(22,140,20)&&dark==Color.FromArgb(68,214,44),"the renderer supplies distinct native theme variants");
+        }
+        using(var fixture=new Fixture()){
+            var preferences=DeviceSettings.Current;
+            preferences.TraySource="mouse";
+            var group=TrayConfiguration.Add(preferences);
+            TrayConfiguration.Move(preferences,"headset",group.Id);
+            DeviceSettings.UseTransientConfiguration(preferences);
+            fixture.Page(PopupPage.TrayIcons);
+            fixture.Click(fixture.Find("tray:group",TrayConfiguration.FirstId));
+            fixture.Click(fixture.Find("tray:brand",TrayConfiguration.FirstId));
+            var automatic=fixture.Find("tray:brand-choice",TrayConfiguration.FirstId);
+            Check(automatic.Selected&&automatic.TargetToken=="auto","brand color defaults to automatic");
+            var razer=fixture.Rows().Find(row=>row.TargetToken=="razer");
+            Check(razer!=null&&razer.BrandSwatch==1,"brand choices include a Razer swatch");
+            fixture.Click(razer);
+            preferences=DeviceSettings.Current;
+            Check(preferences.TrayBrandColor=="razer"&&preferences.TrayGroups[0].BrandColor=="auto","manual color only affects the chosen slot");
+            var views=fixture.Owner.BuildTrayViews(preferences,new BatteryView(),new BatteryView());
+            Check((TaskbarStrip.Reading.FromView(views[0],20).Flags>>8)==1,"manual brand color reaches the taskbar renderer");
+            string path=Path.Combine(output,"tray-brand-colors.json");
+            preferences.TrayGroups[0].BrandColor="off";
+            DeviceSettings.SaveBindings(path,preferences);
+            var loaded=DeviceSettings.LoadBindings(path);
+            Check(loaded.TrayBrandColor=="razer"&&loaded.TrayGroups[0].BrandColor=="off","brand choices persist independently");
+            Check(TrayBrand.Resolve("off","razer",0x1532,"Razer Mouse","mouse")==0,"off takes priority over a recognized brand");
+        }
+    }
+    static void AutomaticGroups(){
+        string path=Path.Combine(output,"auto-tray-groups.json");
+        var pref=new AudioBindings();
+        var now=DateTime.UtcNow;
+        var mouse=Card("mouse","mouse",90);
+        var headset=Card("headset","headset",60);
+        var keyboard=Card("keyboard","keyboard",30,false);
+        keyboard.Device.ConnectionState="disconnected";
+        var wiredAudio=Card("audio","headset",null);wiredAudio.AudioOnly=true;
+        var candidates=new List<WirelessCard>{mouse,keyboard,wiredAudio};
+        Check(TrayAutoSetup.Discover(pref,candidates,now)&&pref.TrayGroups.Count==0,"the first recognized kind keeps the primary slot and cached or audio-only devices are ignored");
+        candidates.Add(headset);
+        Check(TrayAutoSetup.Discover(pref,candidates,now)&&pref.TrayGroups.Count==1&&pref.TrayGroups[0].Members.Contains(headset.Id),"a later connected headset gets one group");
+        candidates.Add(Card("second-headset","headset",61));
+        Check(!TrayAutoSetup.Discover(pref,candidates,now)&&pref.TrayGroups.Count==1,"another headset and repeated snapshots keep one group for the kind");
+        var group=pref.TrayGroups[0];
+        TrayConfiguration.Rename(pref,group.Id,"工作耳机");
+        TrayConfiguration.Move(pref,headset.Id,TrayConfiguration.FirstId);
+        Check(!TrayAutoSetup.Discover(pref,candidates,now)&&group.Name=="工作耳机"&&group.Members.Count==0,"the automatic rule preserves manual name and membership changes");
+        TrayConfiguration.Remove(pref,group.Id);
+        DeviceSettings.SaveBindings(path,pref);
+        pref=DeviceSettings.LoadBindings(path);
+        Check(!TrayAutoSetup.Discover(pref,candidates,now)&&pref.TrayGroups.Count==0,"a deleted group stays deleted after reconnect and settings reload");
+        keyboard.Device.ConnectionState="connected";keyboard.Battery.Fresh=true;
+        Check(TrayAutoSetup.Discover(pref,candidates,now)&&pref.TrayGroups.Count==1&&pref.TrayGroups[0].Name=="键盘","a newly confirmed keyboard can still be added later");
+        pref.AutoCreateTrayGroups=false;
+        candidates.Add(Card("gamepad","gamepad",70));
+        DeviceSettings.SaveBindings(path,pref);
+        pref=DeviceSettings.LoadBindings(path);
+        Check(!TrayAutoSetup.Discover(pref,candidates,now)&&pref.TrayGroups.Count==1,"the saved toggle stops automatic additions");
+        File.WriteAllText(path,"{\"SchemaVersion\":1,\"TraySource\":\"mouse\",\"TrayGroupHintShown\":true}");
+        Check(!DeviceSettings.LoadBindings(path).AutoCreateTrayGroups,"legacy settings remember prior manual grouping even when the extra groups are gone");
+        File.WriteAllText(path,"{\"SchemaVersion\":1,\"TraySource\":\"mouse\"}");
+        Check(DeviceSettings.LoadBindings(path).AutoCreateTrayGroups,"legacy default grouping can opt into first discovery automatically");
+        File.WriteAllText(path,"{\"SchemaVersion\":1,\"Theme\":\"dark\",\"AutoCreateTrayGroups\":{},\"AutoTrayDiscovery\":[]}");
+        var malformed=DeviceSettings.LoadBindings(path);
+        Check(!malformed.AutoCreateTrayGroups&&malformed.Theme=="dark","malformed discovery settings preserve the rest of the configuration");
+    }
     static void Tooltips(){
         var card=Card("device","mouse",46);card.Name="Logitech G Pro";var cards=new List<WirelessCard>{card};
         Check(TraySelection.Present(cards,card,"工作设备").Tooltip=="工作设备：Logitech G Pro 46%","multiple icons use group and device names");
@@ -101,7 +210,9 @@ static class TrayGroupsTests {
         view=TraySelection.Present(new List<WirelessCard>(),null,"游戏设备");Check(view.Battery.Percent==null&&view.Tooltip=="游戏设备：没有已连接的设备","empty icons remain present with the required message");
     }
     sealed class FakeIcon:ITrayIcon {
-        internal int Disposals,Recreations;public bool Update(TrayView view,string style,bool dark,int size){return false;}public void Recreate(){Recreations++;}public void Dispose(){Disposals++;}
+        internal int Disposals,Recreations;public bool Update(TrayView view,bool dark,int size){return false;}public void Recreate(){Recreations++;}public void Dispose(){Disposals++;}
+        internal bool Suppressed;
+        public void Suppress(bool value){Suppressed=value;}
     }
     static void Lifecycle(){
         var first=new FakeIcon();var made=new Dictionary<string,FakeIcon>();int creations=0;
@@ -109,7 +220,11 @@ static class TrayGroupsTests {
         var a=new TrayGroup {Id="g2"};var b=new TrayGroup {Id="g3"};icons.Sync(new[]{a,b});var second=made[a.Id];var third=made[b.Id];
         a.Name="改名";icons.Sync(new[]{b,a});Check(creations==2&&icons.First==first&&icons.For(a.Id)==second&&icons.For(b.Id)==third,"renaming and reordering preserve all icon instances");
         icons.Sync(new[]{b});Check(second.Disposals==1&&third.Disposals==0&&first.Disposals==0,"removing a group disposes only its icon");
-        icons.Sync(new[]{b,new TrayGroup {Id="g4"}});Check(creations==3&&icons.For(b.Id)==third,"adding a group creates only its icon");
+          icons.SuppressAll(true);
+          icons.Sync(new[]{b,new TrayGroup {Id="g4"}});Check(creations==3&&icons.For(b.Id)==third,"adding a group creates only its icon");
+          Check(first.Suppressed&&third.Suppressed&&made["g4"].Suppressed,"existing and new tray icons are hidden while the taskbar strip is active");
+          icons.SuppressAll(false);
+          Check(!first.Suppressed&&!third.Suppressed&&!made["g4"].Suppressed,"fallback restores all tray icons");
         using(var window=new DeviceEventsWindow(delegate{},null,null,icons.RecreateAll)){
             var message=Message.Create(window.Handle,DeviceEventsWindow.TaskbarCreated,IntPtr.Zero,IntPtr.Zero);typeof(DeviceEventsWindow).GetMethod("WndProc",Private).Invoke(window,new object[]{message});
         }
@@ -159,7 +274,17 @@ static class TrayGroupsTests {
             f.Click(f.Find("tray:group",TrayConfiguration.FirstId));Check(!f.Rows().Exists(delegate(PopupControl row){return row.ActionKey=="tray:rename"||row.ActionKey=="tray:delete";})&&f.Rows().Exists(delegate(PopupControl row){return row.Text=="包含其余所有设备";}),"first group cannot be renamed or deleted");
             f.Click(f.Find("tray:rules"));Check(f.Nav.Page==PopupPage.ChoosePreference&&f.Nav.PreferenceAction==211,"first group opens the existing six-rule selector");
             var all=PopupPages.Build(f.Owner,new PopupNavigation {Page=PopupPage.ChoosePreference,PreferenceAction=211,VisibleChoices=100},false);foreach(int id in new[]{410,411,412,413,414,415})Check(all.Exists(delegate(PopupControl row){return row.Id==id;}),"legacy tray rule remains available: "+id);
-            f.Page(PopupPage.TrayIcons);f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==224;}));f.Click(f.Rows().Find(delegate(PopupControl row){return row.Id==451;}));Check(DeviceSettings.Current.TrayIconStyle=="device"&&f.Nav.Page==PopupPage.TrayIcons,"style selection saves and returns to the icon list");
+            f.Page(PopupPage.TrayIcons);
+            var autoCreate=f.Rows().Find(delegate(PopupControl row){return row.Id==TrayConfiguration.AutoCreateToggleId;});
+            Check(autoCreate!=null&&DeviceSettings.Current.AutoCreateTrayGroups,"automatic grouping is enabled by default");
+            f.Click(autoCreate);
+            Check(!DeviceSettings.Current.AutoCreateTrayGroups&&f.Nav.Page==PopupPage.TrayIcons,"the tray settings toggle saves without leaving the page");
+            var style=f.Rows().Find(delegate(PopupControl row){return row.Id==224;});
+            Check(style.Value==TrayConfiguration.IconPresetName,"tray settings display the unified preset");
+            f.Click(style);
+            var styles=f.Rows().FindAll(delegate(PopupControl row){return row.Id==450||row.Id==451;});
+            Check(styles.Count==1&&styles[0].Selected&&styles[0].Text==TrayConfiguration.IconPresetName,"only the unified preset is available");
+            f.Click(styles[0]);Check(f.Nav.Page==PopupPage.TrayIcons,"the selected preset returns to the icon list");
             f.Nav.TrayGroupKey=b.Id;f.Page(PopupPage.TrayMembers);pref=DeviceSettings.Current;for(int i=0;i<18;i++)f.Owner.WirelessDevices=Append(f.Owner.WirelessDevices,Device("paged-"+i));
             Check(f.Rows().Exists(delegate(PopupControl row){return row.Id==8;}),"member selection uses existing paging");f.Click(f.Find("tray:member",b.Id,"paged-17"));Check(TrayConfiguration.Owner(DeviceSettings.Current,"paged-17")==b.Id,"paged device actions retain their identity");
         }
@@ -297,8 +422,10 @@ static class TrayGroupsTests {
         var previous=DeviceSettings.Current;
         try {
             Run("configuration contract",Contracts);Run("selection contract",SelectionContract);Run("lifecycle contract",LifecycleContract);Run("device style contract",DeviceStyleContract);Run("preferences entry",PreferencesEntry);
-            Run("tolerant configuration and downgrade compatibility",Configuration);Run("exclusive group editing",GroupEditing);Run("pure selection rules",Selection);Run("group tooltip formatting",Tooltips);Run("incremental icon lifecycle and Explorer recovery",Lifecycle);Run("settings navigation and actions",SettingsUi);Run("tray integration",Integration);Run("hidden candidates without extra groups",delegate{HiddenCandidates(false);});Run("hidden candidates with extra groups",delegate{HiddenCandidates(true);});Run("extra-group activity and rename dialog",ActiveGroupAndRename);Run("settings bounds, identity and previews",SettingsRendering);Run("native-size device glyphs and bars",DeviceRendering);
+            Run("tolerant configuration and downgrade compatibility",Configuration);Run("exclusive group editing",GroupEditing);Run("pure selection rules",Selection);Run("configured groups control taskbar slots",TaskbarReadings);Run("group tooltip formatting",Tooltips);Run("incremental icon lifecycle and Explorer recovery",Lifecycle);Run("settings navigation and actions",SettingsUi);Run("tray integration",Integration);Run("hidden candidates without extra groups",delegate{HiddenCandidates(false);});Run("hidden candidates with extra groups",delegate{HiddenCandidates(true);});Run("extra-group activity and rename dialog",ActiveGroupAndRename);Run("settings bounds, identity and previews",SettingsRendering);Run("native-size device glyphs and bars",DeviceRendering);
             foreach(int size in new[]{16,20,24,32}){int pixels=size;Run("battery bars at "+pixels+"px",delegate{BatteryBars(pixels);});}
+            Run("automatic discovery, manual edits and deletion persistence",AutomaticGroups);
+            Run("per-group brand choices and persistence",BrandColors);
             Console.WriteLine(checks+" checks, "+failures+" failures");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
     }

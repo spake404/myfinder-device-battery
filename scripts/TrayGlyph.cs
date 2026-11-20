@@ -52,13 +52,14 @@ namespace AtkBatteryTray {
                 return result;
             }
         }
-        public static Bitmap RenderDevice(int? percent,bool charge,bool dark,bool stale,int size,string kind,Color? updateBadge=null,bool? taskbarDark=null){
+        public static Bitmap RenderDevice(int? percent,bool charge,bool dark,bool stale,int size,string kind,Color? updateBadge=null,bool? taskbarDark=null,Color? brandColor=null){
+            if(VisualDesign.HighContrast)brandColor=null;
             size=Math.Max(16,Math.Min(64,size));int canvas=size*4;
             using(var large=new Bitmap(canvas,canvas,PixelFormat.Format32bppPArgb)){
                 using(var g=Graphics.FromImage(large)){
                     g.Clear(Color.Transparent);g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.ScaleTransform(canvas/32f,canvas/32f);
                     Color gray=LevelColor(null,dark),foreground=VisualDesign.HighContrast?SystemColors.WindowText:dark?Color.FromArgb(244,246,248):Color.FromArgb(27,36,48);
-                    Color symbol=percent.HasValue&&!stale?foreground:gray;
+                    Color symbol=percent.HasValue&&!stale?brandColor??foreground:gray;
                     if(updateBadge.HasValue)g.TranslateTransform(-4,0);
                     if(kind=="mouse"||kind=="keyboard"||kind=="headset"||kind=="gamepad")CompactRenderer.DrawSymbol(g,kind,new RectangleF(4,1,24,19),symbol);
                     else {
@@ -88,7 +89,7 @@ namespace AtkBatteryTray {
                     if(percent.HasValue&&percent.Value>0){
                         float filled=Math.Max(1,barWidth*Math.Min(100,percent.Value)/100f);
                         using(var fill=VisualDesign.RoundRect(1,barTop,filled,barHeight,1))
-                        using(var brush=new SolidBrush(stale?gray:LevelColor(percent,dark)))g.FillPath(brush,fill);
+                        using(var brush=new SolidBrush(stale?gray:percent<=15?LevelColor(percent,dark):brandColor??LevelColor(percent,dark)))g.FillPath(brush,fill);
                     }
                 }
                 // Keep the native margin transparent after bicubic downsampling.

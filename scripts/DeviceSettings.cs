@@ -63,7 +63,7 @@ namespace AtkBattery {
         [DataMember(Order=20)] public bool AutoCheckUpdates = true;
         [DataMember(Order=21)] public string ThemeStyle = "ocean";
         [DataMember(Order=22, EmitDefaultValue=false)] public List<TrayGroup> TrayGroups = new List<TrayGroup>();
-        [DataMember(Order=23)] public string TrayIconStyle = "number";
+        [DataMember(Order=23)] public string TrayIconStyle = TrayConfiguration.IconPreset;
         [DataMember(Order=24, EmitDefaultValue=false)] public bool TrayGroupHintShown;
         [DataMember(Order=25, EmitDefaultValue=false)] public TrayIconPosition LastTrayIconPosition;
         [DataMember(Order=26)] public bool ShowUpdateBadge = true;
@@ -71,12 +71,16 @@ namespace AtkBattery {
         [DataMember(Order=28)] public bool IncludeBetaUpdates = true;
         [DataMember(Order=29)] public string FontSize = "normal";
         [DataMember(Order=30)] public string PanelLayout = "ring";
+        [DataMember(Order=31)] public bool UseTaskbarStrip = true;
+        [DataMember(Order=32)] public bool AutoCreateTrayGroups = true;
+        [DataMember(Order=33,EmitDefaultValue=false)] public int AutoTrayDiscovery;
+        [DataMember(Order=34,EmitDefaultValue=false)] public string TrayBrandColor;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
-            TrayGroups=new List<TrayGroup>();TrayIconStyle="number";
+            TrayGroups=new List<TrayGroup>();TrayIconStyle=TrayConfiguration.IconPreset;UseTaskbarStrip=true;
         }
 
         public AudioBindings Clone() {
@@ -89,6 +93,10 @@ namespace AtkBattery {
                 HiddenDeviceIds=HiddenDeviceIds==null?new List<string>():new List<string>(HiddenDeviceIds),DeviceOrder=DeviceOrder==null?new List<string>():new List<string>(DeviceOrder),ExplicitAudioBindingsOnly=ExplicitAudioBindingsOnly };
             if(AudioDeviceBindings!=null)foreach(var pair in AudioDeviceBindings)copy.AudioDeviceBindings[pair.Key]=pair.Value==null?null:pair.Value.Clone();
             copy.TrayIconStyle=TrayIconStyle;copy.TrayGroupHintShown=TrayGroupHintShown;
+            copy.UseTaskbarStrip=UseTaskbarStrip;
+            copy.AutoCreateTrayGroups=AutoCreateTrayGroups;
+            copy.AutoTrayDiscovery=AutoTrayDiscovery;
+            copy.TrayBrandColor=TrayBrandColor;
             copy.LastTrayIconPosition=LastTrayIconPosition==null?null:LastTrayIconPosition.Clone();
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
@@ -232,11 +240,17 @@ namespace AtkBattery {
                 catch(XmlException error){throw new SerializationException("Invalid audio settings JSON",error);}
                 // A malformed layout value must not discard the other settings.
                 while(document.DocumentElement["PanelLayout"]!=null&&document.DocumentElement["PanelLayout"].GetAttribute("type")!="string")document.DocumentElement.RemoveChild(document.DocumentElement["PanelLayout"]);
-                var fields=new AudioBindings();TrayConfiguration.ReadFields(document.DocumentElement,fields);
+                while(document.DocumentElement["UseTaskbarStrip"]!=null&&document.DocumentElement["UseTaskbarStrip"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["UseTaskbarStrip"]);
+                var fields=new AudioBindings();bool? autoEnabled=TrayConfiguration.ReadFields(document.DocumentElement,fields);
                 AudioBindings settings;
                 using(var reader=new XmlNodeReader(document))settings=serializer.ReadObject(reader) as AudioBindings;
                 if(settings==null)throw new InvalidDataException("Invalid audio settings");
                 settings.TrayGroups=fields.TrayGroups;settings.TrayIconStyle=fields.TrayIconStyle;settings.TrayGroupHintShown=fields.TrayGroupHintShown;
+                bool defaultTrayRule=String.IsNullOrEmpty(settings.TraySource)||settings.TraySource=="active"||settings.TraySource=="mouse";
+                settings.AutoCreateTrayGroups=autoEnabled??(defaultTrayRule&&!settings.TrayGroupHintShown&&
+                    settings.TrayGroups.Count==0&&String.IsNullOrWhiteSpace(settings.TrayDeviceId));
+                settings.AutoTrayDiscovery=fields.AutoTrayDiscovery;
+                settings.TrayBrandColor=fields.TrayBrandColor;
                 Validate(settings);
                 return settings;
             }

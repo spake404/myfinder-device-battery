@@ -317,12 +317,16 @@ namespace AtkBatteryTray {
                 }
                 if(control.ActionKey!=null&&control.ActionKey.StartsWith("tray:",StringComparison.Ordinal)){PerformTrayAction(control,pref);return;}
                 if(id==211){Go(PopupPage.TrayIcons);return;}
+                if(id==TrayConfiguration.AutoCreateToggleId&&navigation.Page==PopupPage.TrayIcons){
+                    pref.AutoCreateTrayGroups=!pref.AutoCreateTrayGroups;
+                    owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
+                }
                 if(id==210||id==213||id==216||id==223||id==224||id==228||id==229){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
                 if(id>=470&&id<=472&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==229){
                     pref.PanelLayout=PanelLayouts.Keys[id-470];navigation.DeviceScroll=0;owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
                 if((id==460||id==461)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==228){pref.FontSize=id==461?"large":"normal";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
-                if((id==450||id==451)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==224){pref.TrayIconStyle=id==450?"number":"device";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
+                if(id==450&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==224){Back();return;}
                 if(id>=440&&id<=443&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==223) {
                     pref.ThemeStyle=ThemePalette.Keys[id-440];owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
@@ -370,10 +374,21 @@ namespace AtkBatteryTray {
                 if(navigation.TrayGroupKey==TrayConfiguration.FirstId){navigation.PreferenceAction=211;Go(PopupPage.ChoosePreference);}else Go(PopupPage.TrayRules);return;
             }
             if(action=="tray:members"){Go(PopupPage.TrayMembers);return;}
+            if(action=="tray:brand"){Go(PopupPage.TrayBrandColors);return;}
             if(action=="tray:delete"){Go(PopupPage.ConfirmTrayDelete);return;}
             if(action=="tray:rename"){EditAlias(false,null,control.GroupKey);UpdateLayoutSize();Invalidate();return;}
             bool hint=false,back=false,deleted=false;
-            if(action=="tray:add"){TrayConfiguration.Add(pref);hint=!pref.TrayGroupHintShown;pref.TrayGroupHintShown=true;}
+            if(action=="tray:brand-choice"&&navigation.Page==PopupPage.TrayBrandColors){
+                string mode=TrayBrand.Normalize(control.TargetToken);
+                if(control.GroupKey==TrayConfiguration.FirstId)pref.TrayBrandColor=mode;
+                else {
+                    var brandGroup=TrayConfiguration.Find(pref,control.GroupKey);
+                    if(brandGroup==null)return;
+                    brandGroup.BrandColor=mode;
+                }
+                back=true;
+            }
+            else if(action=="tray:add"){TrayConfiguration.Add(pref);hint=!pref.TrayGroupHintShown;pref.TrayGroupHintShown=true;}
             else if(action=="tray:confirm-delete"){TrayConfiguration.Remove(pref,control.GroupKey);deleted=true;}
             else {
                 var group=TrayConfiguration.Find(pref,control.GroupKey);if(group==null)throw new InvalidOperationException("分组不存在");
@@ -691,8 +706,8 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(preferences.PanelLayout);
             visible.Append('|').Append(gridControlScroll);
             visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(preferences.IncludeBetaUpdates).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb()).Append('|').Append(preferences.CheckFeedbackReplies).Append('|').Append(owner.FeedbackReplies.Store.Unread);
-            visible.Append('|').Append(preferences.TrayIconStyle).Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint);
-            foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId);foreach(string id in group.Members)visible.Append('|').Append(id);}
+            visible.Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint).Append('|').Append(preferences.AutoCreateTrayGroups).Append('|').Append(preferences.TrayBrandColor);
+            foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId).Append('|').Append(group.BrandColor);foreach(string id in group.Members)visible.Append('|').Append(id);}
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
             if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name).Append('|').Append(device.FormFactor);
             visible.Append('|').Append(owner.DesiredVolume).Append('|').Append(hoverAction).Append('|').Append(pressedAction);
@@ -774,6 +789,9 @@ namespace AtkBatteryTray {
         internal void CheckUpdates(){if(devicePackChecks!=null)devicePackChecks.Check(false);if(updates!=null)updates.Check(false);}
         readonly NotifyIcon tray=new NotifyIcon();
         readonly TrayIconSet trayIcons;
+        readonly NativeTrayIcon primaryTrayIcon;
+        TaskbarStrip taskbarStrip;
+        readonly System.Windows.Forms.Timer balloonExpiry=new System.Windows.Forms.Timer {Interval=30000};
         readonly Dictionary<string,string> groupDeviceKeys=new Dictionary<string,string>(StringComparer.Ordinal);
         readonly System.Windows.Forms.Timer refresh=new System.Windows.Forms.Timer();
         readonly System.Windows.Forms.Timer liveSync=new System.Windows.Forms.Timer();
@@ -906,12 +924,14 @@ namespace AtkBatteryTray {
             return result;
         }
         public TrayContext(bool showPanel=false) : this(showPanel,ReadWithRetry,MouseBattery.SetActiveDpiStage,HeadsetBattery.Read,AudioBrokerClient.Read,true,AudioBrokerClient.Switch,AudioBrokerClient.Mute,AudioBrokerClient.Volume,null,AudioBrokerClient.Execute,null,null,MouseBattery.SetActiveDpiStage,null,true) {
-            updates=new UpdateController(dispatch,UpdateIcon,delegate(string title,string message,bool update){balloonRoute.Set(update?TrayBalloonKind.Update:TrayBalloonKind.LowBattery);tray.ShowBalloonTip(5000,title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
+            updates=new UpdateController(dispatch,UpdateIcon,delegate(string title,string message,bool update){balloonRoute.Set(update?TrayBalloonKind.Update:TrayBalloonKind.LowBattery);ShowTrayBalloon(title,message.Length>240?message.Substring(0,240):message,ToolTipIcon.Info);});
             // Program.Main already holds Local\ATK-A9-Air-Battery-Tray for this lifetime.
             FeedbackReplies=new FeedbackReplies(FeedbackStore.Current,new FeedbackHttp());
-            feedbackChecks=new FeedbackReplyController(FeedbackReplies,dispatch,delegate(FeedbackBalloon balloon){balloonRoute.Set(TrayBalloonKind.Feedback,balloon.Number);tray.ShowBalloonTip(5000,balloon.Title,balloon.Text,ToolTipIcon.Info);});
+            feedbackChecks=new FeedbackReplyController(FeedbackReplies,dispatch,delegate(FeedbackBalloon balloon){balloonRoute.Set(TrayBalloonKind.Feedback,balloon.Number);ShowTrayBalloon(balloon.Title,balloon.Text,ToolTipIcon.Info);});
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
-            deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else{deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed)trayIcons.RecreateAll();});
+            deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else{deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed){if(taskbarStrip!=null)taskbarStrip.Reset();trayIcons.RecreateAll();UpdateIcon();}});
+            taskbarStrip=new TaskbarStrip(trayIcons.SuppressAll,HandleTaskbarClick);
+            UpdateIcon();
             try{mouseActivity=new MouseActivityListener(HandleMouseActivity,delegate(Action action){if(!disposed)dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});});activityListenerState="ready";}catch(Exception){activityListenerState="unavailable";SafeDiagnostic.Transition("mouse_activity","unavailable");}
             audioDebounce.Interval=200;audioDebounce.Tick+=delegate{audioDebounce.Stop();RequestAudioRead(true);};
             ThreadPool.QueueUserWorkItem(delegate{try{var listener=AudioControl.Listen(delegate{try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed){audioDebounce.Stop();audioDebounce.Start();}});}catch(InvalidOperationException){}});if(disposed)listener.Dispose();else audioEvents=listener;}catch(Exception){SafeDiagnostic.Transition("audio_notifications","unavailable");}});
@@ -944,11 +964,22 @@ namespace AtkBatteryTray {
             var checkUpdates=new ToolStripMenuItem("检查更新…");checkUpdates.Click+=delegate{if(UpdateAvailable)OpenUpdate();else CheckUpdates();};menu.Items.Add(checkUpdates);
             menu.Opening+=delegate{checkUpdates.Text=UpdateAvailable?"查看新版本 "+updates.Version+"…":"检查更新…";};
             var myFeedback=new ToolStripMenuItem("我的反馈");myFeedback.Click+=delegate{OpenMyFeedback();};menu.Items.Add(myFeedback);
-            menu.Opening+=delegate{myFeedback.Text=FeedbackReplies.Store.MenuText;};
+            menu.Opening+=delegate{myFeedback.Text=FeedbackReplies==null?"我的反馈":FeedbackReplies.Store.MenuText;};
+            if(diagnostics){
+                var taskbarOption=new ToolStripMenuItem("任务栏电量条");
+                taskbarOption.Click+=delegate{
+                    var preferences=DeviceSettings.Current.Clone();
+                    preferences.UseTaskbarStrip=!preferences.UseTaskbarStrip;
+                    try{saveConfiguration(preferences);ConfigurationChanged(false);}catch(Exception){SafeDiagnostic.Transition("taskbar_strip","save_failed");}
+                };
+                menu.Opening+=delegate{taskbarOption.Checked=DeviceSettings.Current.UseTaskbarStrip;};
+                menu.Items.Add(taskbarOption);
+            }
             menu.Items.Add(new ToolStripSeparator());
             var exit=new ToolStripMenuItem("\u9000\u51fa");exit.Click+=delegate {ExitThread();};menu.Items.Add(exit);
             ConfigureTrayIcon(tray,menu);
-            trayIcons=new TrayIconSet(new NativeTrayIcon(tray,diagnostics),delegate(string id){var extra=new NotifyIcon();ConfigureTrayIcon(extra,menu);return new NativeTrayIcon(extra,diagnostics);});
+            primaryTrayIcon=new NativeTrayIcon(tray,diagnostics);
+            trayIcons=new TrayIconSet(primaryTrayIcon,delegate(string id){var extra=new NotifyIcon();ConfigureTrayIcon(extra,menu);return new NativeTrayIcon(extra,diagnostics);});
             if(diagnostics&&DeviceSettings.Current.RememberReadings)ReadingCache.Load(Path.Combine(DeviceSettings.DataDirectory,"readings-cache.json"),out LastGood,out lastKnownHeadset);
             if(diagnostics&&DeviceSettings.Current.RememberReadings)foreach(var device in ReadingCache.LoadWireless(Path.Combine(DeviceSettings.DataDirectory,"wireless-cache.json")))wirelessCache[device.Id]=device;
             UpdateIcon();
@@ -962,7 +993,8 @@ namespace AtkBatteryTray {
                 RequestHeadsetRead(false);RequestAudioRead(false);
                 RequestWirelessRead(false);
             };
-            tray.BalloonTipClicked+=delegate {balloonRoute.Click(OpenUpdate,delegate{ShowDetails(true);},delegate(long number){OpenMyFeedback(number);});};
+            balloonExpiry.Tick+=delegate {EndTrayBalloon();};
+            tray.BalloonTipClicked+=delegate {EndTrayBalloon();balloonRoute.Click(OpenUpdate,delegate{ShowDetails(true);},delegate(long number){OpenMyFeedback(number);});};
             RefreshBattery(false);
             if(showPanel)dispatch.BeginInvoke((MethodInvoker)delegate {ShowDetails(true);});
         }
@@ -971,6 +1003,21 @@ namespace AtkBatteryTray {
             // MouseClick omits the second release of a Windows double-click.
             notify.MouseDown+=delegate(object sender,MouseEventArgs e){HandleTrayMouseDown(e.Button);};
             notify.MouseUp+=delegate(object sender,MouseEventArgs e){HandleTrayMouseUp(e.Button);};
+        }
+        void ShowTrayBalloon(string title,string text,ToolTipIcon type) {
+            balloonExpiry.Stop();
+            primaryTrayIcon.ShowBalloon(title,text,type);
+            balloonExpiry.Start();
+        }
+        void EndTrayBalloon() {
+            balloonExpiry.Stop();
+            primaryTrayIcon.EndBalloon();
+        }
+        internal void HandleTaskbarClick(int message,Point point) {
+            if(disposed)return;
+            if(message==0x0201)HandleTrayMouseDown(MouseButtons.Left);
+            else if(message==0x0202)HandleTrayMouseUp(MouseButtons.Left,point);
+            else if(message==0x0205)tray.ContextMenuStrip.Show(point);
         }
         void ShowDetails(bool fromLauncher=false) {
             if(details!=null&&!details.IsDisposed){details.Reveal();return;}
@@ -995,7 +1042,7 @@ namespace AtkBatteryTray {
             trayPressCloses=trayPressTarget!=null&&!trayPressTarget.IsClosing;
             if(!trayPressCloses&&trayPressTarget!=null)trayPressTarget.CancelDeferredDeactivation();
         }
-        internal void HandleTrayMouseUp(MouseButtons button) {
+        internal void HandleTrayMouseUp(MouseButtons button,Point? click=null) {
             if(button!=MouseButtons.Left||disposed)return;
             var target=trayPressPending?trayPressTarget:details;
             // Up-only tray mirrors should also close a surviving popup, never reverse
@@ -1003,7 +1050,7 @@ namespace AtkBatteryTray {
             bool close=trayPressPending?trayPressCloses:target!=null&&!target.IsDisposed;
             trayPressPending=false;trayPressCloses=false;trayPressTarget=null;
             if(close){if(target!=null&&!target.IsDisposed&&OwnsDetails(target))target.CloseAnimated();return;}
-            var point=CursorPosition();var preferences=DeviceSettings.Current;
+            var point=click??CursorPosition();var preferences=DeviceSettings.Current;
             preferences.LastTrayIconPosition=TrayIconPosition.Capture(point,Screen.FromPoint(point).Bounds);
             try{saveConfiguration(preferences);}catch(Exception){SafeDiagnostic.Transition("tray_position","save_failed");}
             if(details!=null&&!details.IsDisposed){details.Reveal();return;}
@@ -1062,30 +1109,49 @@ namespace AtkBatteryTray {
             if(busy==0&&headsetBusy==0&&audioBusy==0&&genericBusy==0&&!pendingRead)manualRefresh=false;
             AudioBindings preferences;try{preferences=DeviceSettings.Current;}catch{preferences=new AudioBindings();}
             DateTime now=DateTime.UtcNow;var mouse=UiState.Mouse(Current,LastGood,now);var headset=UiState.Headset(Headset,now);
-            var presentation=UiState.Tray(preferences.TraySource,mouse,headset);var shown=presentation.Battery;
-            if(UseWirelessLayout||preferences.TrayGroups.Count>0||preferences.TraySource=="active"||!String.IsNullOrEmpty(preferences.TrayDeviceId)){presentation=WirelessTray(preferences.TraySource);shown=presentation.Battery;}
-            bool dark=Style.Dark;int size=SystemInformation.SmallIconSize.Width;
-            Color background=preferences.TrayIconStyle=="number"?TrayGlyph.NumberFill(shown.Percent,shown.Percent.HasValue&&!shown.Fresh):TrayGlyph.LevelColor(shown.Percent,dark);
-            UpdateDotColor=UpdateBadge.ColorFor(ThemePalette.Current(dark).Accent,background,Style.TaskbarDark);
-            presentation.UpdateColor=UpdateDotColor;presentation.UpdateBadge=updates!=null&&updates.BadgeVisible;
-            presentation.Tooltip=UpdateBadge.Tooltip(presentation.Tooltip,updates==null?null:updates.Version);
-            if(trayIcons.First.Update(presentation,preferences.TrayIconStyle,dark,size))iconUpdates++;
-            trayIcons.Sync(preferences.TrayGroups);
-            foreach(string id in new List<string>(groupDeviceKeys.Keys))if(TrayConfiguration.Find(preferences,id)==null)groupDeviceKeys.Remove(id);
-            if(preferences.TrayGroups.Count>0){
-                var candidates=TrayCandidates(true);
-                foreach(var group in preferences.TrayGroups){
-                    var members=candidates.FindAll(delegate(WirelessCard card){return group.Members.Contains(card.Id)&&(card.Device==null||card.Device.Online&&card.Device.ConnectionState!="disconnected");});
-                    string previous;groupDeviceKeys.TryGetValue(group.Id,out previous);
-                    var selected=TraySelection.Select(members,group.Source,group.DeviceId,activePhysicalId,activeNative,previous,true);
-                    groupDeviceKeys[group.Id]=selected==null?null:selected.Id;
-                    trayIcons.For(group.Id).Update(TraySelection.Present(members,selected,group.Name),preferences.TrayIconStyle,dark,size);
+            List<WirelessCard> candidates=null;
+            if(persistStatus&&!DeviceSettings.UsingDefaults&&TrayAutoSetup.NeedsDiscovery(preferences)) {
+                candidates=TrayCandidates(true);
+                var discovered=preferences.Clone();
+                if(TrayAutoSetup.Discover(discovered,candidates,now)) {
+                    try {saveConfiguration(discovered);preferences=discovered;}
+                    catch(Exception){SafeDiagnostic.Transition("tray_auto_setup","save_failed");}
                 }
             }
+            var views=BuildTrayViews(preferences,mouse,headset,candidates);
+            var presentation=views[0];
+            bool dark=Style.Dark;int size=SystemInformation.SmallIconSize.Width;
+            Color background=TrayGlyph.LevelColor(presentation.Battery.Percent,dark);
+            UpdateDotColor=UpdateBadge.ColorFor(ThemePalette.Current(dark).Accent,background,Style.TaskbarDark);
+            presentation.UpdateColor=UpdateDotColor;presentation.UpdateBadge=updates!=null&&updates.BadgeVisible;
+            string updateVersion=updates==null?null:updates.Version;
+            presentation.Tooltip=UpdateBadge.Tooltip(presentation.Tooltip,updateVersion);
+            if(trayIcons.First.Update(presentation,dark,size))iconUpdates++;
+            trayIcons.Sync(preferences.TrayGroups);
+            for(int index=0;index<preferences.TrayGroups.Count;index++)
+                trayIcons.For(preferences.TrayGroups[index].Id).Update(views[index+1],dark,size);
+            if(taskbarStrip!=null)taskbarStrip.Update(preferences.UseTaskbarStrip,views,!Style.TaskbarDark,preferences.WarningThreshold);
             if(details!=null&&!details.IsDisposed)details.SyncDevices();
             if(persistStatus&&preferences.LowBatteryNotifications)EvaluateLowBattery(mouse,headset);
             ScheduleExpiry();
             SaveStatus();
+        }
+        internal List<TrayView> BuildTrayViews(AudioBindings preferences,BatteryView mouse,BatteryView headset,List<WirelessCard> candidates=null) {
+            bool wirelessTray=UseWirelessLayout||preferences.TrayGroups.Count>0||preferences.TraySource=="active"||!String.IsNullOrEmpty(preferences.TrayDeviceId);
+            if(wirelessTray&&candidates==null)candidates=TrayCandidates(true);
+            var primary=wirelessTray?SelectWirelessTray(preferences.TraySource,preferences,candidates):UiState.Tray(preferences.TraySource,mouse,headset);
+            if(!wirelessTray&&primary.Battery.Percent.HasValue)
+                primary.BrandAccent=TrayBrand.Resolve(preferences.TrayBrandColor,primary.DeviceKind=="headset"?"hyperx":null,null,null,primary.DeviceKind);
+            var views=new List<TrayView> {primary};
+            foreach(string id in new List<string>(groupDeviceKeys.Keys))if(TrayConfiguration.Find(preferences,id)==null)groupDeviceKeys.Remove(id);
+            foreach(var group in preferences.TrayGroups){
+                var members=candidates.FindAll(delegate(WirelessCard card){return group.Members.Contains(card.Id)&&(card.Device==null||card.Device.Online&&card.Device.ConnectionState!="disconnected");});
+                string previous;groupDeviceKeys.TryGetValue(group.Id,out previous);
+                var selected=TraySelection.Select(members,group.Source,group.DeviceId,activePhysicalId,activeNative,previous,true);
+                groupDeviceKeys[group.Id]=selected==null?null:selected.Id;
+                views.Add(TraySelection.Present(members,selected,group.Name,group.BrandColor));
+            }
+            return views;
         }
         void ScheduleExpiry(){
             expiryTimer.Stop();var now=DateTime.UtcNow;DateTime earliest=DateTime.MaxValue;
@@ -1094,11 +1160,14 @@ namespace AtkBatteryTray {
             if(earliest!=DateTime.MaxValue){expiryTimer.Interval=Math.Max(250,Math.Min(91000,(int)(earliest-now).TotalMilliseconds));expiryTimer.Start();}
         }
         TrayView WirelessTray(string source) {
-            var pref=DeviceSettings.Current;var available=TrayCandidates(true);
+            return SelectWirelessTray(source,DeviceSettings.Current,TrayCandidates(true));
+        }
+        TrayView SelectWirelessTray(string source,AudioBindings pref,List<WirelessCard> candidates) {
+            var available=new List<WirelessCard>(candidates);
             available.RemoveAll(delegate(WirelessCard card){return TrayConfiguration.Owner(pref,card.Id)!=TrayConfiguration.FirstId||card.Hidden&&card.Id!=pref.TrayDeviceId;});
             var selected=TraySelection.Select(available,source,pref.TrayDeviceId,activePhysicalId,activeNative,trayDeviceKey);
             trayDeviceKey=selected==null?null:selected.Id;
-            return TraySelection.Present(available,selected,pref.TrayGroups.Count>0?TrayConfiguration.FirstName:null);
+            return TraySelection.Present(available,selected,pref.TrayGroups.Count>0?TrayConfiguration.FirstName:null,pref.TrayBrandColor);
         }
         List<WirelessCard> TrayCandidates(bool includeHidden){return WirelessLayout.Build(this,0,100000,includeHidden).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly&&card.Battery!=null&&(card.Device!=null||card.NativeMouse||card.NativeHeadset);});}
         void EvaluateLowBattery(BatteryView mouse,BatteryView headset) {
@@ -1115,7 +1184,7 @@ namespace AtkBatteryTray {
                 foreach(var device in WirelessDevices)if(lowBattery.IsLatched(device.Id))saved.Append('\n').Append(device.Id).Append("=1");
                 fileWriter.Enqueue(Path.Combine(DeviceSettings.DataDirectory,"low-battery-state.txt"),saved.ToString());
             }catch(IOException){}catch(UnauthorizedAccessException){}
-            if(messages.Count>0){string text=String.Join(" · ",messages.ToArray());if(text.Length>240)text=text.Substring(0,237)+"…";balloonRoute.Set(TrayBalloonKind.LowBattery);tray.ShowBalloonTip(5000,"外设电量较低",text,ToolTipIcon.Warning);}
+            if(messages.Count>0){string text=String.Join(" · ",messages.ToArray());if(text.Length>240)text=text.Substring(0,237)+"…";balloonRoute.Set(TrayBalloonKind.LowBattery);ShowTrayBalloon("外设电量较低",text,ToolTipIcon.Warning);}
         }
         void SaveStatus() {
             if(!persistStatus)return;
@@ -1604,7 +1673,7 @@ namespace AtkBatteryTray {
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;
             if(genericWorker!=null)genericWorker.Dispose();
             if(persistStatus)AudioBrokerClient.Shutdown();fileWriter.Dispose();
-            if(details!=null)details.Close();var menu=tray.ContextMenuStrip;trayIcons.Dispose();if(menu!=null)menu.Dispose();dispatch.Dispose();base.ExitThreadCore();
+            if(details!=null)details.Close();var menu=tray.ContextMenuStrip;balloonExpiry.Dispose();if(taskbarStrip!=null)taskbarStrip.Dispose();trayIcons.Dispose();if(menu!=null)menu.Dispose();dispatch.Dispose();base.ExitThreadCore();
         }
     }
     static class Program {

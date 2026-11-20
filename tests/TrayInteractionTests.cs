@@ -155,6 +155,28 @@ static class TrayInteractionTests {
         }
     }
 
+    static void TaskbarStripClick() {
+        var reading=TaskbarStrip.Reading.FromView(new TrayView {
+            DeviceKind="mouse",Battery=new BatteryView {Percent=70,Fresh=true,Charging=true}
+        },20);
+        Check(reading.Kind==1&&reading.Percent==70&&reading.Flags==1,"native strip receives the same mouse reading and charging state");
+        reading=TaskbarStrip.Reading.FromView(new TrayView {
+            DeviceKind="headset",Battery=new BatteryView {Percent=15,Fresh=false,Charging=true,Approximate=true}
+        },20);
+        Check(reading.Kind==2&&reading.Percent==15&&reading.Flags==10,"a cached estimate cannot show fresh charging or a low battery alert");
+        using(var fixture=new Fixture(true)) {
+            var position=new System.Drawing.Point(fixture.CursorPoint.X+60,fixture.CursorPoint.Y);
+            fixture.Context.HandleTaskbarClick(0x0201,position);
+            Check(fixture.Current==null,"taskbar press does not open the panel before release");
+            fixture.Context.HandleTaskbarClick(0x0202,position);
+            var panel=fixture.Current;
+            Check(panel!=null&&panel.Visible&&(System.Drawing.Point)AnchorField.GetValue(panel)==position,"taskbar opens the original panel at the click location");
+            fixture.Context.HandleTaskbarClick(0x0201,position);
+            fixture.Context.HandleTaskbarClick(0x0202,position);
+            Until(delegate{return panel.IsDisposed;},"second click dismisses the original panel");
+        }
+    }
+
     static void SlowClicks() {
         using(var f=new Fixture()) {
             f.Down();Check(f.Current==null,"a closed tray press waits for release before opening");
@@ -386,6 +408,7 @@ static class TrayInteractionTests {
             if(Array.IndexOf(args,"--replacement-only")>=0){Run("captured target replaced before release",ReplacedTarget);Run("visible replacement native activation probe",VisibleReplacementActivation);return 0;}
             if(Array.IndexOf(args,"--lifecycle-only")>=0){Run("popup native handle lifecycle",PopupHandleLifecycle);Run("captured target replaced before release",ReplacedTarget);Console.WriteLine("PASS "+checks+" hidden lifecycle/replacement checks");return 0;}
             Run("popup native handle lifecycle",PopupHandleLifecycle);
+            Run("taskbar strip uses existing panel and click location",TaskbarStripClick);
             Run("slow tray open/close",SlowClicks);
             Run("actual NotifyIcon fast double-click callback sequence",FastDoubleClick);
             Run("deactivation before tray down",DeactivateBeforeDown);

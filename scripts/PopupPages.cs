@@ -5,7 +5,7 @@ using System.Drawing.Drawing2D;
 using AtkBattery;
 
 namespace AtkBatteryTray {
-    internal enum PopupPage { Main, More, Audio, Preferences, Mouse, Headset, Diagnostics, Bindings, PickBinding, ChoosePreference, Devices, Device, ManageDevice, DeviceMissing, TrayIcons, TrayGroup, TrayRules, TrayMembers, ConfirmTrayDelete }
+    internal enum PopupPage { Main, More, Audio, Preferences, Mouse, Headset, Diagnostics, Bindings, PickBinding, ChoosePreference, Devices, Device, ManageDevice, DeviceMissing, TrayIcons, TrayGroup, TrayRules, TrayMembers, ConfirmTrayDelete, TrayBrandColors }
     internal sealed class PopupControl {
         public int Id;
         public int DpiValue;
@@ -15,10 +15,11 @@ namespace AtkBatteryTray {
         public RectangleF VisibleRect {get{if(!Viewport.HasValue)return Rect;var visible=RectangleF.Intersect(Rect,Viewport.Value);return visible.Width>0&&visible.Height>0?visible:RectangleF.Empty;}}
         public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken,PaletteKey,LayoutKey,AccessibleName;
         public string GroupKey;
+        public int BrandSwatch;
         public bool Enabled=true,Selected,Toggle,Checked,Information,Slider,Busy,WrapText,Section;
         public string StableKey {get {
             string action=ActionKey;
-            if(action=="tray:rule")action+=":"+TargetToken;
+            if(action=="tray:rule"||action=="tray:brand-choice")action+=":"+TargetToken;
             if(DpiValue>0)action="wireless-dpi:"+DpiValue+":"+(TargetToken??"");
             if(String.IsNullOrEmpty(action))action=Id>=2000&&Id<3000?"refresh":Id>=1000&&Id<2000?"details":Id>=300&&Id<400?"binding:"+(EndpointId??"auto"):"action:"+Id;
             return (GroupKey==null?"":GroupKey+"|")+(DeviceKey??"global")+"|"+action;
@@ -67,7 +68,7 @@ namespace AtkBatteryTray {
         static List<WirelessCard> TrayDevices(TrayContext owner){return WirelessLayout.Build(owner,0,100000,true).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly&&(card.Device!=null||card.NativeMouse||card.NativeHeadset);});}
         static string FixedTrayName(TrayContext owner,string id){var device=TrayDevices(owner).Find(delegate(WirelessCard card){return card.Id==id;});return "固定："+(device==null?"已断开的设备":device.Name);}
         static string TrayRule(TrayContext owner,string source,string deviceId){return !String.IsNullOrEmpty(deviceId)?FixedTrayName(owner,deviceId):source=="active"?"当前使用的设备":source=="auto"?"自动":source=="mouse"?"鼠标优先":source=="headset"?"耳机优先":source=="keyboard"?"键盘优先":"最低电量";}
-        static PopupControl GroupRow(string action,string text,string groupId,string value=null){var row=Row(610+Array.IndexOf(new[]{"add","rename","rules","members","delete","confirm-delete","rule","member","group-pin","group"},action),text,value);row.ActionKey="tray:"+action;row.GroupKey=groupId;return row;}
+        static PopupControl GroupRow(string action,string text,string groupId,string value=null){var row=Row(610+Array.IndexOf(new[]{"add","rename","rules","members","delete","confirm-delete","rule","member","group-pin","group","brand","brand-choice"},action),text,value);row.ActionKey="tray:"+action;row.GroupKey=groupId;return row;}
         static List<WirelessCard> MemberDevices(TrayContext owner,AudioBindings pref){
             var cards=WirelessLayout.Build(owner,0,100000,true).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly&&card.Id!="native:audio";});
             foreach(var group in pref.TrayGroups)foreach(string id in group.Members)if(!cards.Exists(delegate(WirelessCard card){return card.Id==id;})){
@@ -141,13 +142,25 @@ namespace AtkBatteryTray {
                 var firstGroup=GroupRow("group",TrayConfiguration.FirstName,TrayConfiguration.FirstId,TrayRule(owner,pref.TraySource,pref.TrayDeviceId));firstGroup.Id=600;rows.Add(firstGroup);
                 foreach(var group in pref.TrayGroups){var row=GroupRow("group",group.Name,group.Id,TrayRule(owner,group.Source,group.DeviceId));row.Id=600+rows.Count;rows.Add(row);}
                 var add=GroupRow("add","添加托盘图标",null);add.Enabled=pref.TrayGroups.Count<3;rows.Add(add);
-                rows.Add(Row(224,"图标样式",pref.TrayIconStyle=="device"?"设备图标":"数字"));
+                rows.Add(Row(224,"图标样式",TrayConfiguration.IconPresetName));
+                rows.Add(Toggle(TrayConfiguration.AutoCreateToggleId,"首次识别时自动添加",pref.AutoCreateTrayGroups));
                 if(nav.TrayHint){var hint=Info(TrayConfiguration.HiddenIconHint,null);hint.WrapText=true;rows.Add(hint);}
             }else if(nav.Page==PopupPage.TrayGroup){
                 var group=TrayConfiguration.Find(pref,nav.TrayGroupKey);
                 if(group==null)rows.Add(Info("包含其余所有设备",null));else rows.Add(GroupRow("rename","名称",group.Id,group.Name));
                 rows.Add(GroupRow("rules","显示规则",nav.TrayGroupKey,TrayRule(owner,group==null?pref.TraySource:group.Source,group==null?pref.TrayDeviceId:group.DeviceId)));
+                rows.Add(GroupRow("brand","品牌颜色",nav.TrayGroupKey,TrayBrand.Name(group==null?pref.TrayBrandColor:group.BrandColor)));
                 if(group!=null){rows.Add(GroupRow("members","包含的设备",group.Id,group.Members.Count+" 台"));rows.Add(GroupRow("delete","删除此图标",group.Id));}
+            }else if(nav.Page==PopupPage.TrayBrandColors){
+                var group=TrayConfiguration.Find(pref,nav.TrayGroupKey);
+                string selectedBrand=TrayBrand.Normalize(group==null?pref.TrayBrandColor:group.BrandColor);
+                var automatic=GroupRow("brand-choice",TrayBrand.Name(TrayBrand.Automatic),nav.TrayGroupKey);
+                automatic.Id=710;automatic.TargetToken=TrayBrand.Automatic;automatic.Selected=selectedBrand==TrayBrand.Automatic;rows.Add(automatic);
+                for(int index=0;index<TrayBrand.Keys.Length;index++){
+                    string brand=TrayBrand.Keys[index];
+                    var row=GroupRow("brand-choice",TrayBrand.Name(brand),nav.TrayGroupKey);
+                    row.Id=711+index;row.TargetToken=brand;row.Selected=brand==selectedBrand;row.BrandSwatch=index;rows.Add(row);
+                }
             }else if(nav.Page==PopupPage.TrayRules){
                 var group=TrayConfiguration.Find(pref,nav.TrayGroupKey);
                 if(group!=null){
@@ -169,7 +182,7 @@ namespace AtkBatteryTray {
                 else if(nav.PreferenceAction==223){labels=new[]{"海蓝","原生","琥珀","青雾"};first=440;selected=Array.IndexOf(ThemePalette.Keys,ThemePalette.Normalize(pref.ThemeStyle));}
                 else if(nav.PreferenceAction==228){labels=new[]{"标准","较大"};first=460;selected=pref.FontSize=="large"?1:0;}
                 else if(nav.PreferenceAction==229){labels=PanelLayouts.Names;first=470;selected=Array.IndexOf(PanelLayouts.Keys,PanelLayouts.Normalize(pref.PanelLayout));}
-                else if(nav.PreferenceAction==224){labels=new[]{"数字","设备图标"};first=450;selected=pref.TrayIconStyle=="device"?1:0;}
+                else if(nav.PreferenceAction==224){labels=new[]{TrayConfiguration.IconPresetName};first=450;selected=0;}
                 else if(nav.PreferenceAction==211){labels=new[]{"当前使用的设备","最低电量","自动选择有数据的设备","鼠标优先","耳机优先","键盘优先"};first=410;selected=pref.TraySource=="active"?0:pref.TraySource=="lowest"?1:pref.TraySource=="auto"?2:pref.TraySource=="mouse"?3:pref.TraySource=="headset"?4:5;}
                 else if(nav.PreferenceAction==213){labels=new[]{"10%","15%","20%"};first=420;selected=pref.WarningThreshold==10?0:pref.WarningThreshold==15?1:2;}
                 else {labels=new[]{"1分钟","2分钟","5分钟"};first=430;selected=pref.BackgroundSeconds==60?0:pref.BackgroundSeconds==120?1:2;}
@@ -472,6 +485,7 @@ namespace AtkBatteryTray {
             if(nav.Page==PopupPage.TrayGroup)return TrayConfiguration.Name(DeviceSettings.Current,nav.TrayGroupKey);
             if(nav.Page==PopupPage.TrayRules)return "显示规则";
             if(nav.Page==PopupPage.TrayMembers)return "包含的设备";
+            if(nav.Page==PopupPage.TrayBrandColors)return "品牌颜色";
             if(nav.Page==PopupPage.ConfirmTrayDelete)return "删除此图标？";
             if(nav.Page==PopupPage.Devices)return "设备管理";
             if(nav.Page==PopupPage.DeviceMissing)return "设备没显示？";
@@ -559,6 +573,15 @@ namespace AtkBatteryTray {
                         InteractionLayout.Include(new RectangleF(x-.5f,y-.5f,31,19));
                     }
                     x+=38;
+                }
+                if(row.BrandSwatch>0&&!VisualDesign.HighContrast){
+                    var swatch=TrayBrand.ColorFor(row.BrandSwatch,!dark);
+                    if(swatch.HasValue){
+                        var dot=new RectangleF(x,rect.Y+(rect.Height-10)/2,10,10);
+                        using(var brush=new SolidBrush(swatch.Value))g.FillEllipse(brush,dot);
+                        InteractionLayout.Include(dot);
+                        x+=18;
+                    }
                 }
                 if(row.Slider) {
                     int? actual=owner.Audio==null?null:owner.Audio.OutputVolumePercent;

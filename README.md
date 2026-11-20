@@ -1,8 +1,18 @@
 # MyFinder Device Battery
 
+此仓库由 [spake404](https://github.com/spake404) 独立维护。`main` 是合并版的开发分支：在 [上游 MyFinder Device Battery](https://github.com/wushuai0802/myfinder-device-battery) 的设备读取与弹窗基础上，集成了 [BatteryHub](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor) 的任务栏电量条和品牌配色。原作者署名及各组件许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+合并版暂未接入独立的签名更新和反馈服务。下文介绍的内置更新、型号数据包和反馈仍沿用上游渠道；请勿用上游的程序更新替换此合并版。合并版源码以本仓库 `main` 为准。
+
 <img src="docs/images/app-icon.png" alt="MyFinder Device Battery 冰川蓝双卡图标" width="96" height="96">
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
+
+任务栏电量条沿用 BatteryHub 的显示方式。左键点击电量条打开 MyFinder 设备电量与音频面板，右键打开原有菜单。任务栏电量条默认开启，按「托盘图标」配置顺序显示，每个分组占一项（最多四项），设备由该组原有的显示规则决定。样式统一为「设备图标＋电量」。分组没有选中的设备或暂时读不到电量时显示 `--`。可在右键菜单关闭「任务栏电量条」，恢复原托盘显示。Windows 任务栏不可用或 BatteryHub 已在同一任务栏显示时会自动回退为托盘图标。
+
+新安装默认开启「托盘图标 → 首次识别时自动添加」。首次读到设备电量时，第一种设备使用「托盘图标 1」，后来首次识别的鼠标、键盘、耳机或手柄按类型自动创建分组。同类设备只自动分组一次，用户可改名、调整成员和删除。已识别的类型会记入配置，删除后不会因重连或重启重新创建。升级时有手动托盘配置的用户可以在原页面开启此功能。
+
+在「托盘图标 → 选择分组 → 品牌颜色」中可为每项选择自动识别、关闭或手动指定品牌色。自动模式依次参考读取器品牌、厂商 ID 和设备原名，不受显示别名影响；未识别时使用默认颜色。品牌色随任务栏深浅切换，显示在设备图标、柔光和百分比下方的细条上。
 
 当前源码版本 **1.3.11-beta.20**（测试版），适用于 Windows 10/11 x64。原生界面使用系统 .NET Framework，发行包内置设备读取组件，无需用户安装Python、厂商驱动或填写VID/PID。公开可下载版本以 Releases 页面为准，旧版本保留在历史Release中。
 
@@ -305,7 +315,7 @@ ATK界面请求固定到用户点击时的接收器、目标DPI值和连接代�
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build.ps1 -OutputDirectory .\tmp\build
 ```
 
-使用系统自带的 x64 .NET Framework 编译器，不下载依赖。构建会运行协议、设置、端点匹配、菜单、控制队列、缓存、低电量策略、DPI坐标和安装回滚检查。测试用模拟硬件和隔离文件夹，安装器检查分别覆盖 PowerShell 5.1、可用时的 PowerShell 7，不改真实自启项或音源。测试截图保存在指定输出目录下。
+界面使用系统自带的 x64 .NET Framework 编译器，任务栏电量条使用 x64 MinGW-w64（默认查找 `C:\msys64\ucrt64\bin\g++.exe` 或 PATH 上的 g++，也可用 `MYFINDER_MINGW_CXX` 指定路径）。发行 ZIP 自带任务栏 DLL。构建会运行协议、设置、端点匹配、菜单、控制队列、缓存、低电量策略、DPI坐标和安装回滚检查。测试用模拟硬件和隔离文件夹，安装器检查分别覆盖 PowerShell 5.1、可用时的 PowerShell 7，不改真实自启项或音源。测试截图保存在指定输出目录下。
 
 `release.json`是版本唯一来源；构建时生成程序集版本信息。`scripts/Package.ps1 -OutputDirectory <目录>` 生成完整ZIP、包内文件清单及 `SHA256SUMS.txt`。使用已经验证的构建可传 `-SkipBuild -BuildDirectory <构建目录>`；源码、版本或构建文件在验证后改变会拒绝打包。
 

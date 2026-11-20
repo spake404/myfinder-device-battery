@@ -26,6 +26,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+      - name: Install the x64 taskbar compiler
+        shell: powershell
+        run: |
+          & C:/msys64/usr/bin/bash.exe -lc 'pacman --noconfirm --needed -S mingw-w64-ucrt-x86_64-gcc'
+          if ($LASTEXITCODE -ne 0) { throw 'MinGW-w64 installation failed.' }
       - name: Build and run isolated checks
         shell: powershell
         run: ./scripts/Build.ps1 -OutputDirectory "$env:RUNNER_TEMP/device-battery-build"

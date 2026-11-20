@@ -21,6 +21,7 @@ namespace AtkBatteryTray {
             (Percent.HasValue&&!Fresh?SystemProvided?"（系统提供"+(String.IsNullOrEmpty(QueryText)?"":"，最近查询 "+QueryText)+"）":String.IsNullOrEmpty(TimeText)?"（历史读数，时间未知）":"（上次 "+TimeText+"）":Charging?" · 充电中":"");}
     }
     public sealed class TrayView {
+        internal int BrandAccent;
         public BatteryView Battery;
         public string Tooltip;
         public string DeviceKind;

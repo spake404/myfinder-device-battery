@@ -13,10 +13,14 @@ namespace AtkBattery {
         [DataMember(Order=2)] public string Source="lowest";
         [DataMember(Order=3,EmitDefaultValue=false)] public string DeviceId;
         [DataMember(Order=4)] public List<string> Members=new List<string>();
-        public TrayGroup Clone(){return new TrayGroup {Id=Id,Name=Name,Source=Source,DeviceId=DeviceId,Members=Members==null?new List<string>():new List<string>(Members)};}
+        [DataMember(Order=5,EmitDefaultValue=false)] public string BrandColor;
+        public TrayGroup Clone(){return new TrayGroup {Id=Id,Name=Name,Source=Source,DeviceId=DeviceId,BrandColor=BrandColor,Members=Members==null?new List<string>():new List<string>(Members)};}
     }
     internal static class TrayConfiguration {
         internal const string FirstId="g1",FirstName="托盘图标 1";
+        internal const string IconPreset="device",IconPresetName="设备图标＋电量";
+        internal const int AutoCreateToggleId=232;
+        internal const int AutoDiscoveredMask=31;
         internal const string HiddenIconHint="Windows 可能把新图标收进隐藏区，可在 设置 → 个性化 → 任务栏 → 其他系统托盘图标 中打开";
         internal static bool ValidId(string id){
             if(String.IsNullOrWhiteSpace(id)||id.Length>64||id!=id.Trim())return false;
@@ -29,12 +33,15 @@ namespace AtkBattery {
             return value;
         }
         internal static void Normalize(AudioBindings pref){
-            pref.TrayIconStyle=pref.TrayIconStyle=="device"?"device":"number";
+            pref.TrayIconStyle=IconPreset;
+            pref.TrayBrandColor=TrayBrand.Normalize(pref.TrayBrandColor);
+            if(pref.AutoTrayDiscovery<0||pref.AutoTrayDiscovery>AutoDiscoveredMask)pref.AutoTrayDiscovery=0;
             var groups=new List<TrayGroup>();var ids=new HashSet<string>(StringComparer.Ordinal);var members=new HashSet<string>(StringComparer.Ordinal);
             foreach(var group in pref.TrayGroups??new List<TrayGroup>()){
                 if(groups.Count==3)break;
                 if(group==null||!ValidId(group.Id)||group.Id==FirstId||!ids.Add(group.Id))continue;
                 var next=group.Clone();next.Name=CleanName(next.Name,"托盘图标 "+(groups.Count+2));
+                next.BrandColor=TrayBrand.Normalize(next.BrandColor);
                 next.Source=next.Source=="active"?"active":"lowest";if(!ValidId(next.DeviceId))next.DeviceId=null;
                 next.Members.Clear();foreach(string id in group.Members??new List<string>()){
                     if(next.Members.Count==64)break;
@@ -46,20 +53,27 @@ namespace AtkBattery {
         }
         // Parse only the new fields independently. A wrong JSON type inside one group
         // must not make DataContractJsonSerializer discard unrelated legacy settings.
-        internal static void ReadFields(XmlElement root,AudioBindings pref){
+        internal static bool? ReadFields(XmlElement root,AudioBindings pref){
             pref.TrayGroups=new List<TrayGroup>();
             var groups=root["TrayGroups"];
             if(groups!=null&&groups.GetAttribute("type")=="array")foreach(XmlNode node in groups.ChildNodes){
                 var item=node as XmlElement;if(item==null||item.GetAttribute("type")!="object")continue;
-                var group=new TrayGroup {Id=ReadString(item["Id"]),Name=ReadString(item["Name"]),Source=ReadString(item["Source"]),DeviceId=ReadString(item["DeviceId"])};
+                var group=new TrayGroup {Id=ReadString(item["Id"]),Name=ReadString(item["Name"]),Source=ReadString(item["Source"]),DeviceId=ReadString(item["DeviceId"]),BrandColor=ReadString(item["BrandColor"])};
                 var list=item["Members"];if(list!=null&&list.GetAttribute("type")=="array")foreach(XmlNode member in list.ChildNodes){string id=ReadString(member as XmlElement);if(id!=null)group.Members.Add(id);}
                 pref.TrayGroups.Add(group);
             }
-            pref.TrayIconStyle=ReadString(root["TrayIconStyle"]);
             var hint=root["TrayGroupHintShown"];pref.TrayGroupHintShown=hint!=null&&hint.GetAttribute("type")=="boolean"&&hint.InnerText=="true";
+            var autoCreate=root["AutoCreateTrayGroups"];
+            bool? autoEnabled=autoCreate==null?(bool?)null:autoCreate.GetAttribute("type")=="boolean"&&autoCreate.InnerText=="true";
+            var autoDiscovery=root["AutoTrayDiscovery"];
+            int discovery;
+            if(autoDiscovery!=null&&autoDiscovery.GetAttribute("type")=="number"&&Int32.TryParse(autoDiscovery.InnerText,out discovery))pref.AutoTrayDiscovery=discovery;
             if(root["FontSize"]!=null&&root["FontSize"].GetAttribute("type")!="string")while(root["FontSize"]!=null)root.RemoveChild(root["FontSize"]);
-            foreach(string field in new[]{"TrayGroups","TrayIconStyle","TrayGroupHintShown"})while(root[field]!=null)root.RemoveChild(root[field]);
+            pref.TrayBrandColor=ReadString(root["TrayBrandColor"]);
+            foreach(string field in new[]{"TrayGroups","TrayIconStyle","TrayGroupHintShown","AutoCreateTrayGroups","AutoTrayDiscovery","TrayBrandColor"})
+                while(root[field]!=null)root.RemoveChild(root[field]);
             Normalize(pref);
+            return autoEnabled;
         }
         static string ReadString(XmlElement node){return node!=null&&node.GetAttribute("type")=="string"?node.InnerText:null;}
         internal static TrayGroup Find(AudioBindings pref,string id){return pref.TrayGroups.Find(delegate(TrayGroup group){return group.Id==id;});}
