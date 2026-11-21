@@ -2,6 +2,7 @@ name: Build and regression checks
 on:
   push:
     branches: [main, 'codex/**']
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -26,6 +27,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+      - name: Verify the release tag matches the package version
+        if: github.ref_type == 'tag'
+        shell: powershell
+        run: |
+          $version = (Get-Content -LiteralPath ./release.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -cne ('v' + $version)) { throw 'The release tag must match release.json.' }
       - name: Install the x64 taskbar compiler
         shell: powershell
         run: |
@@ -59,6 +66,7 @@ jobs:
           name: windows-x64-complete-package
           path: |
             ${{ runner.temp }}/device-battery-release/*.zip
+            ${{ runner.temp }}/device-battery-release/*-Setup.exe
             ${{ runner.temp }}/device-battery-release/SHA256SUMS.txt
             ${{ runner.temp }}/device-battery-release/*/package-manifest.json
             ${{ runner.temp }}/device-battery-release/*/engine/dependencies.lock.json

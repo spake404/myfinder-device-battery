@@ -49,7 +49,8 @@ internal static class DevicePackTests {
         var data=Bytes(Pack(1));string pointer=Pointer(1,data);
         foreach(string bad in new[]{pointer.Replace("\"loader\":1","\"loader\":2"),pointer.Replace("\"loader\":1","\"loader\":1,\"loader\":1"),pointer.Replace("\"size\":"+data.Length,"\"size\":262145"),pointer.Replace("device-pack-v1-1.json","../escape.json"),pointer.Replace("\"format\":","\"other\":0,\"format\":"),pointer.Replace("\"loader\":1","\"loader\":1.0")})Reject(()=>DevicePackPointer.Parse(Bytes(bad)),"strict pointer fields and types");
         Check(UpdateCatalog.Select(new[]{new UpdateRelease {Tag="device-pack"}},"1.3.6",null)==null,"program updates ignore device-pack tag");
-        Check(UpdateCatalog.Select(new[]{new UpdateRelease {Tag="device-pack"},new UpdateRelease {Tag="v1.3.7"}},"1.3.6",null).Version=="1.3.7","device-pack release cannot mask real program update");
+        var program=new UpdateRelease {Tag="v1.3.7",Assets=Array.ConvertAll(new[]{UpdateTrust.ZipName("1.3.7"),"SHA256SUMS.txt","SHA256SUMS.txt.sig"},name=>new UpdateAsset {Name=name,Size=100,Url=UpdateTrust.Repository+"/releases/download/v1.3.7/"+name})};
+        Check(UpdateCatalog.Select(new[]{new UpdateRelease {Tag="device-pack"},program},"1.3.6",null)==program,"device-pack release cannot mask real program update");
         Reject(()=>UpdateNetwork.ValidateUri(new Uri(DevicePackTrust.Mirror+"device-pack-v1-latest.json"),false),"program update allowlist unchanged");
     }
     static void Network(){

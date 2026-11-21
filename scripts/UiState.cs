@@ -22,6 +22,7 @@ namespace AtkBatteryTray {
     }
     public sealed class TrayView {
         internal int BrandAccent;
+        internal bool Hidden;
         public BatteryView Battery;
         public string Tooltip;
         public string DeviceKind;
@@ -44,6 +45,7 @@ namespace AtkBatteryTray {
         public string Key {get {return PendingStage+"|"+PendingOutput+"|"+MicrophonePending+"|"+ManualRefreshing+"|"+AudioBlocked+"|"+DpiFailure+"|"+AudioFailure+"|"+KeyboardFocus+"|"+ShowPendingHints+"|"+HoverAction+"|"+PressedAction+"|"+VolumePreview+"|"+UpdatedNotice;}}
     }
     public static class UiState {
+        internal const string CurrentOutputTitle="当前输出";
         // Receiver audio endpoints can remain active after the wireless headset disconnects.
         // Use existing readings only, and restrict this exclusion to card visibility.
         internal static bool IsDisconnectedWirelessHeadset(AudioDeviceChoice endpoint,HeadsetReading headset,IEnumerable<WirelessDevice> wirelessDevices) {

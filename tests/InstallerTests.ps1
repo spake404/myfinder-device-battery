@@ -156,6 +156,15 @@ if($failure -cne "已取消。请先在托盘图标上右键选择‘退出’�
         Assert ((Get-DeviceBatteryFileHash (Join-Path $manualTarget 'engine\providers\base.py')) -ceq (Get-DeviceBatteryFileHash (Join-Path $manualPackage 'engine\providers\base.py'))) 'confirmed normal exit allows the changed payload to install'
         Assert ($manualState.ForcedStops -eq 0) 'confirmed normal exit never force-stops a process'
     }
+    [IO.File]::WriteAllText((Join-Path $manualPackage 'engine\providers\base.py'),'# accepted by graphical setup')
+    $null=New-DeviceBatteryPackageManifest $manualPackage
+    $startupLink=Join-Path $manualStartup (Get-DeviceBatteryShortcutName)
+    if(Test-Path -LiteralPath $startupLink -PathType Leaf){Remove-Item -LiteralPath $startupLink}
+    $manualState.Running=$true;$manualState.ExitSucceeds=$true;$manualState.ExitRequested=$false
+    $manualState.PromptCount=0;$manualState.ExitCalls=0;$manualState.ExitPolls=0
+    $result=& $entry @entryPaths @hooks -FromSetup
+    Assert ($result.PayloadChanged -and $manualState.PromptCount -eq 0 -and $manualState.ExitCalls -eq 1 -and -not $manualState.Running) 'graphical setup uses its consent and waits for normal exit without a console prompt'
+    Assert (-not (Test-Path -LiteralPath $startupLink)) 'graphical setup upgrade preserves absent login startup'
 }
 $fixtureRoot=Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) ('installer-'+$PSVersionTable.PSVersion.Major+'-'+[Guid]::NewGuid().ToString('N'))
 # Exercise Unicode and spaces without making script decoding depend on host encoding.

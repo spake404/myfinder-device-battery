@@ -1,6 +1,7 @@
 #include "widget.h"
 
 #include "i18n.h"
+#include "reserve.h"
 
 #include <commctrl.h>
 #include <uiautomation.h>
@@ -10,6 +11,7 @@
 namespace {
 
 HWND g_wnd, g_taskbar, g_tip, g_notify, g_rebar;
+bool g_xaml;  // Windows 11 XAML taskbar: the task buttons end early through reserve::Update
 UINT g_clickMsg;
 bool g_light, g_hover;
 COLORREF g_badge = CLR_INVALID;
@@ -873,6 +875,7 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     g_rebar = FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
                   ? nullptr
                   : FindWindowExW(g_taskbar, nullptr, L"ReBarWindow32", nullptr);
+    g_xaml = !g_rebar && FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr);
     g_notify = notifyWnd;
     g_clickMsg = clickMsg;
     g_light = lightTheme;
@@ -915,6 +918,8 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
 }
 
 void Destroy() {
+    if (g_xaml) reserve::Update(g_taskbar && IsWindow(g_taskbar) ? g_taskbar : nullptr, g_inst, 0);
+    g_xaml = false;
     if (g_rebar && IsWindow(g_rebar) && g_taskbar && IsWindow(g_taskbar)) {
         // Let Explorer lay the task buttons out again over the full width.
         RECT r;
@@ -990,7 +995,10 @@ bool Reposition() {
     if (!Alive() || g_size.cx <= 0 || g_size.cy <= 0 ||
         FindWindowExW(g_taskbar, nullptr, L"WirelessBatteryWidget", nullptr)) return false;
     SyncMirrors();
-    if (g_primaryHidden) return true;  // only another monitor's taskbar shows the strip
+    if (g_primaryHidden) {  // only another monitor's taskbar shows the strip
+        if (g_xaml) reserve::Update(g_taskbar, g_inst, 0);
+        return true;
+    }
     if (Dpi() != g_lastDpi) { g_lastDpi = Dpi(); Paint(); }
     HWND tray = FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr);
     if (!tray) return false;
@@ -1003,6 +1011,7 @@ bool Reposition() {
         g_vertical = vertical;
         Paint();
     }
+    if (g_xaml && g_vertical) reserve::Update(g_taskbar, g_inst, 0);
     if (g_vertical) {
         // Left or right taskbar (PR #321): the column sits just above the notification area, centred in
         // the bar's width.
@@ -1071,6 +1080,12 @@ bool Reposition() {
     }
 
     if (left < 0) return false;
+
+    if (g_xaml) {
+        POINT trayLeft{ tr.left, tr.top };
+        ScreenToClient(g_taskbar, &trayLeft);
+        reserve::Update(g_taskbar, g_inst, rtl ? 0 : trayLeft.x - left + Px(4));
+    }
 
     // Windows 10: Explorer re-expands the task buttons on its own layout passes; narrow them again.
     if (g_rebar && IsWindow(g_rebar)) {

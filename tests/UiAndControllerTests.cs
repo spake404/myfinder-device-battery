@@ -75,6 +75,8 @@ static class UiAndControllerTests {
             low.Percent=18;low.Fresh=false;Check(!policy.Observe("mouse",low,true),"cached low battery never sends a warning");
             low.Fresh=true;low.Charging=true;Check(!policy.Observe("mouse",low,true),"charging does not produce a low battery warning");
             low.Charging=false;low.Percent=18;var customPolicy=new LowBatteryPolicy();Check(!customPolicy.Observe("mouse",low,true,15),"custom threshold defers the notification until it is reached");
+            Check(LowBatteryVoice.Phrase(new[]{"鼠标","办公键盘","鼠标"},15)=="警告，鼠标、办公键盘电量已降至百分之十五或以下。","voice batches devices and says the configured threshold");
+            Check(LowBatteryVoice.Phrase(new[]{"耳机"},20)=="警告，耳机电量已降至百分之二十或以下。"&&LowBatteryVoice.Phrase(new string[0],10)==null,"voice describes the inclusive trigger and skips empty reports");
             foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}) {
                 var point=UiState.LogicalPoint(new Point((int)(150*scale),(int)(160*scale)),scale);
                 Check(Math.Abs(point.X-150)<.81&&Math.Abs(point.Y-160)<.81,"hit coordinate maps correctly at "+scale);
@@ -163,8 +165,12 @@ static class UiAndControllerTests {
                 navigation.Page=PopupPage.Preferences;navigation.VisibleChoices=3;navigation.MaximumHeight=259;navigation.Offset=0;
                 var compactPreferences=PopupPages.Build(context,navigation,true);
                 Check(compactPreferences.Exists(delegate(PopupControl row){return row.Id==8;})&&PopupPages.SizeFor(compactPreferences).Height<260,"secondary preferences paginate in a small high-DPI work area");
-                navigation.Offset=12;compactPreferences=PopupPages.Build(context,navigation,true);
-                Check(compactPreferences.Exists(delegate(PopupControl row){return row.Id==217;})&&compactPreferences.Exists(delegate(PopupControl row){return row.Id==7;}),"clear-history remains reachable on the last preferences page");
+                var offsets=new System.Collections.Generic.HashSet<int>();
+                while(!compactPreferences.Exists(row=>row.Id==217)&&offsets.Add(navigation.Offset)){
+                    var next=compactPreferences.Find(row=>row.Id==8);if(next==null)break;
+                    navigation.Offset=next.PageOffset;compactPreferences=PopupPages.Build(context,navigation,true);
+                }
+                Check(compactPreferences.Exists(row=>row.Id==217)&&compactPreferences.Exists(row=>row.Id==7),"clear-history remains reachable through preferences pagination");
                 navigation.VisibleChoices=7;navigation.MaximumHeight=0;navigation.Offset=0;
                 navigation.Page=PopupPage.Main;
                 var mainControls=PopupPages.Build(context,navigation,true);

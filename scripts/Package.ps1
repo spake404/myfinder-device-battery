@@ -27,12 +27,12 @@ foreach($entry in @($info.sources)) {
 }
 if((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -cne $release.version){throw 'Binary informational version does not match release.json.'}
 $name='myfinder-device-battery-v'+$release.version+'-windows-x64'
-$stage=Join-Path $OutputDirectory $name;$zip=Join-Path $OutputDirectory ($name+'.zip')
-if((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)){throw 'Package output already exists; choose a new output directory.'}
+$stage=Join-Path $OutputDirectory $name;$zip=Join-Path $OutputDirectory ($name+'.zip');$setup=Join-Path $OutputDirectory ($name+'-Setup.exe')
+if((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip) -or (Test-Path -LiteralPath $setup)){throw 'Package output already exists; choose a new output directory.'}
 $runtime=Join-Path $root 'engine\runtime'
 $null=& (Join-Path $PSScriptRoot 'Build-Backend.ps1') -OutputDirectory $runtime
 New-Item -ItemType Directory -Path (Join-Path $stage 'outputs'),(Join-Path $stage 'scripts') -Force|Out-Null
-foreach($file in @('AtkMouseBattery.exe','AtkBatteryProbe.exe','MyFinderTaskbar.dll')){Copy-Item -LiteralPath (Join-Path $BuildDirectory $file) -Destination (Join-Path $stage 'outputs')}
+foreach($file in @('AtkMouseBattery.exe','AtkBatteryProbe.exe','MyFinderTaskbar.dll','MyFinderTaskbarReserve.dll')){Copy-Item -LiteralPath (Join-Path $BuildDirectory $file) -Destination (Join-Path $stage 'outputs')}
 Copy-Item -LiteralPath (Join-Path $root 'native\batteryhub\COPYING') -Destination (Join-Path $stage 'BatteryHub-COPYING.txt')
 foreach($file in @('Install.Common.ps1','Manifest.Common.ps1','Install-Startup.ps1','Uninstall-Startup.ps1','Start.ps1','Apply-Update.ps1','Update.Common.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stage 'scripts')}
 foreach($file in @('README.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md','LICENSE','release.json')){Copy-Item -LiteralPath (Join-Path $root $file) -Destination $stage}
@@ -70,6 +70,15 @@ try {
         $null=[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive,$item.FullName,$relative,[IO.Compression.CompressionLevel]::Optimal)
     }
 } finally {$archive.Dispose()}
+$compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+& $compiler /nologo /target:winexe /platform:x64 /optimize+ "/win32manifest:$(Join-Path $root 'assets\app.manifest')" "/win32icon:$(Join-Path $root 'assets\app-icon.ico')" `
+    /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Runtime.Serialization.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll `
+    "/resource:$zip,MyFinderReleaseZip" "/out:$setup" (Join-Path $root 'tools\Setup.cs') (Join-Path $PSScriptRoot 'UpdateValidation.cs') (Join-Path $BuildDirectory 'AssemblyInfo.generated.cs')
+if($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $setup).VersionInfo.ProductVersion -cne $release.version){throw 'Setup build failed or its version is incorrect.'}
+$verification=Start-Process -FilePath $setup -ArgumentList '--verify-payload',('"'+$zip+'"') -WindowStyle Hidden -PassThru
+try {if(-not $verification.WaitForExit(120000) -or $verification.ExitCode -ne 0){throw 'Setup does not contain the validated release ZIP.'}}
+finally {$verification.Dispose()}
 $sum=Join-Path $OutputDirectory 'SHA256SUMS.txt'
-[IO.File]::WriteAllText($sum,((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+[IO.Path]::GetFileName($zip)+[Environment]::NewLine),(New-Object Text.UTF8Encoding($false)))
-[pscustomobject]@{Version=$release.version;Zip=$zip;Checksums=$sum;Stage=$stage;Manifest=(Join-Path $stage 'package-manifest.json');Files=@($manifest.files).Count}
+$lines=foreach($artifact in @($zip,$setup)){(Get-DeviceBatteryFileHash $artifact).ToLowerInvariant()+'  '+[IO.Path]::GetFileName($artifact)}
+[IO.File]::WriteAllLines($sum,[string[]]$lines,(New-Object Text.UTF8Encoding($false)))
+[pscustomobject]@{Version=$release.version;Zip=$zip;Setup=$setup;Checksums=$sum;Stage=$stage;Manifest=(Join-Path $stage 'package-manifest.json');Files=@($manifest.files).Count}

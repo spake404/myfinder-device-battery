@@ -12,7 +12,7 @@ using AtkBattery;
 
 namespace AtkBattery {
     internal static class FeedbackRelay {
-        internal const string Url="https://myfinder-feedback-relay.wushuai0802.deno.net";
+        internal const string Url="";
         internal static void ValidateUri(Uri uri){
             if(uri==null||!uri.IsAbsoluteUri||uri.Scheme!=Uri.UriSchemeHttps||uri.UserInfo.Length!=0||uri.Query.Length!=0||uri.Fragment.Length!=0)throw new ArgumentException("Invalid feedback relay URL.");
         }
@@ -94,7 +94,8 @@ namespace AtkBattery {
     internal sealed class FeedbackClient {
         readonly string relay;readonly IFeedbackTransport http;readonly FeedbackSession session;readonly int timeoutMilliseconds;readonly FeedbackStore store;readonly Func<DateTime> clock;readonly Func<byte[],FeedbackReceipt> readReceipt;
         internal FeedbackClient(string address,IFeedbackTransport transport,FeedbackSession history,int timeout=20000,FeedbackStore records=null,Func<DateTime> now=null,Func<byte[],FeedbackReceipt> receiptReader=null){relay=address;http=transport;session=history;timeoutMilliseconds=timeout;store=records??new FeedbackStore(null);clock=now??delegate{return DateTime.UtcNow;};readReceipt=receiptReader??delegate(byte[] bytes){return UpdateJson.Read<FeedbackReceipt>(bytes);};}
-        internal static string IssueUrl(long number){if(number<=0||number>9007199254740991L)throw new ArgumentException("Invalid issue number.");return "https://github.com/wushuai0802/myfinder-device-battery/issues/"+number.ToString(CultureInfo.InvariantCulture);}
+        internal const string IssuesUrl=UpdateTrust.Repository+"/issues";
+        internal static string IssueUrl(long number){if(number<=0||number>9007199254740991L)throw new ArgumentException("Invalid issue number.");return IssuesUrl+"/"+number.ToString(CultureInfo.InvariantCulture);}
         internal static bool IsIssueUrl(long number,string url){return number>0&&number<=9007199254740991L&&String.Equals(url,IssueUrl(number),StringComparison.Ordinal);}
         internal FeedbackResult Submit(string category,string description,string diagnostics,CancellationToken token){
             token.ThrowIfCancellationRequested();

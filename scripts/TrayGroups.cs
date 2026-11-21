@@ -14,7 +14,8 @@ namespace AtkBattery {
         [DataMember(Order=3,EmitDefaultValue=false)] public string DeviceId;
         [DataMember(Order=4)] public List<string> Members=new List<string>();
         [DataMember(Order=5,EmitDefaultValue=false)] public string BrandColor;
-        public TrayGroup Clone(){return new TrayGroup {Id=Id,Name=Name,Source=Source,DeviceId=DeviceId,BrandColor=BrandColor,Members=Members==null?new List<string>():new List<string>(Members)};}
+        [DataMember(Order=6)] public bool HideWhenDisconnected=true;
+        public TrayGroup Clone(){return new TrayGroup {Id=Id,Name=Name,Source=Source,DeviceId=DeviceId,BrandColor=BrandColor,HideWhenDisconnected=HideWhenDisconnected,Members=Members==null?new List<string>():new List<string>(Members)};}
     }
     internal static class TrayConfiguration {
         internal const string FirstId="g1",FirstName="托盘图标 1";
@@ -59,6 +60,7 @@ namespace AtkBattery {
             if(groups!=null&&groups.GetAttribute("type")=="array")foreach(XmlNode node in groups.ChildNodes){
                 var item=node as XmlElement;if(item==null||item.GetAttribute("type")!="object")continue;
                 var group=new TrayGroup {Id=ReadString(item["Id"]),Name=ReadString(item["Name"]),Source=ReadString(item["Source"]),DeviceId=ReadString(item["DeviceId"]),BrandColor=ReadString(item["BrandColor"])};
+                var hide=item["HideWhenDisconnected"];group.HideWhenDisconnected=hide==null||hide.GetAttribute("type")!="boolean"||hide.InnerText!="false";
                 var list=item["Members"];if(list!=null&&list.GetAttribute("type")=="array")foreach(XmlNode member in list.ChildNodes){string id=ReadString(member as XmlElement);if(id!=null)group.Members.Add(id);}
                 pref.TrayGroups.Add(group);
             }

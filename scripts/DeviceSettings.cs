@@ -75,12 +75,14 @@ namespace AtkBattery {
         [DataMember(Order=32)] public bool AutoCreateTrayGroups = true;
         [DataMember(Order=33,EmitDefaultValue=false)] public int AutoTrayDiscovery;
         [DataMember(Order=34,EmitDefaultValue=false)] public string TrayBrandColor;
+        [DataMember(Order=35,EmitDefaultValue=false)] public bool LowBatteryVoice;
+        [DataMember(Order=36)] public bool TrayHideWhenDisconnected=true;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
-            TrayGroups=new List<TrayGroup>();TrayIconStyle=TrayConfiguration.IconPreset;UseTaskbarStrip=true;
+            TrayGroups=new List<TrayGroup>();TrayIconStyle=TrayConfiguration.IconPreset;UseTaskbarStrip=true;TrayHideWhenDisconnected=true;
         }
 
         public AudioBindings Clone() {
@@ -97,6 +99,8 @@ namespace AtkBattery {
             copy.AutoCreateTrayGroups=AutoCreateTrayGroups;
             copy.AutoTrayDiscovery=AutoTrayDiscovery;
             copy.TrayBrandColor=TrayBrandColor;
+            copy.TrayHideWhenDisconnected=TrayHideWhenDisconnected;
+            copy.LowBatteryVoice=LowBatteryVoice;
             copy.LastTrayIconPosition=LastTrayIconPosition==null?null:LastTrayIconPosition.Clone();
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
@@ -241,6 +245,8 @@ namespace AtkBattery {
                 // A malformed layout value must not discard the other settings.
                 while(document.DocumentElement["PanelLayout"]!=null&&document.DocumentElement["PanelLayout"].GetAttribute("type")!="string")document.DocumentElement.RemoveChild(document.DocumentElement["PanelLayout"]);
                 while(document.DocumentElement["UseTaskbarStrip"]!=null&&document.DocumentElement["UseTaskbarStrip"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["UseTaskbarStrip"]);
+                while(document.DocumentElement["LowBatteryVoice"]!=null&&document.DocumentElement["LowBatteryVoice"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["LowBatteryVoice"]);
+                while(document.DocumentElement["TrayHideWhenDisconnected"]!=null&&document.DocumentElement["TrayHideWhenDisconnected"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["TrayHideWhenDisconnected"]);
                 var fields=new AudioBindings();bool? autoEnabled=TrayConfiguration.ReadFields(document.DocumentElement,fields);
                 AudioBindings settings;
                 using(var reader=new XmlNodeReader(document))settings=serializer.ReadObject(reader) as AudioBindings;

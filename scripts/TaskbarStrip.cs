@@ -56,15 +56,17 @@ namespace AtkBatteryTray {
             placement.Tick+=delegate { Synchronize(); };
         }
 
+        internal static List<TrayView> VisibleViews(List<TrayView> views){return views.FindAll(view=>!view.Hidden);}
         internal void Update(bool enabled, List<TrayView> views, bool lightTheme, int warningThreshold) {
-            if(!enabled||unavailable) {
+            var visible=enabled&&!unavailable?VisibleViews(views):null;
+            if(visible==null||visible.Count==0) {
                 placement.Stop();
                 Reset();
                 return;
             }
             var current=new List<Reading>();
             var tips=new List<string>();
-            foreach(var view in views) {
+            foreach(var view in visible) {
                 current.Add(Reading.FromView(view,warningThreshold));
                 tips.Add(view.Tooltip);
             }

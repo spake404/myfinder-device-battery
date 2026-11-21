@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [string]$InstallDirectory,[string]$DataDirectory,[string]$StartupDirectory,[string]$ProgramsDirectory,
-    [switch]$PreserveStartup,[switch]$StopRunning,
+    [switch]$PreserveStartup,[switch]$StopRunning,[switch]$FromSetup,
     # Replace only these interaction boundaries in isolated installer tests.
     [scriptblock]$CanPrompt={
         [Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost' -and
@@ -21,8 +21,9 @@ $source=Split-Path -Parent $PSScriptRoot
 $data=if($DataDirectory){$DataDirectory}else{Get-DeviceBatteryDataDirectory}
 if(-not $StartupDirectory){$StartupDirectory=[Environment]::GetFolderPath('Startup')}
 if(-not $ProgramsDirectory){$ProgramsDirectory=[Environment]::GetFolderPath('Programs')}
+if($FromSetup -or [string]::IsNullOrWhiteSpace($InstallDirectory)){$previous=Read-DeviceBatteryReceipt $data}
+if($FromSetup){$StopRunning=$true;if($previous){$PreserveStartup=$true}}
 if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
-    $previous=Read-DeviceBatteryReceipt $data
     $InstallDirectory=if($previous){$previous.InstallDirectory}else{
         Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\MyFinderDeviceBattery'
     }
@@ -33,10 +34,12 @@ if($StopRunning) {
     if(@(Get-DeviceBatteryOwnedProcesses $stopDirectory).Count -gt 0) {
         $null=Assert-DeviceBatteryInstallDirectory $stopDirectory $source $data
         $cancelled="已取消。请先在托盘图标上右键选择‘退出’，再重新运行安装。"
-        if(-not (& $CanPrompt)){throw $cancelled}
-        try {$answer=& $ConfirmStopRunning '检测到 MyFinder 设备电量正在运行，安装需要先关闭它。是否自动关闭并继续安装？[Y/N]'}
-        catch {throw $cancelled}
-        if($answer -cnotmatch '^[Yy]$'){throw $cancelled}
+        if(-not $FromSetup){
+            if(-not (& $CanPrompt)){throw $cancelled}
+            try {$answer=& $ConfirmStopRunning '检测到 MyFinder 设备电量正在运行，安装需要先关闭它。是否自动关闭并继续安装？[Y/N]'}
+            catch {throw $cancelled}
+            if($answer -cnotmatch '^[Yy]$'){throw $cancelled}
+        }
         $executable=Resolve-DeviceBatteryPayloadPath $stopDirectory 'outputs/AtkMouseBattery.exe'
         $clock=[Diagnostics.Stopwatch]::StartNew()
         $null=& $RequestExit $executable

@@ -72,7 +72,7 @@ namespace AtkBatteryTray {
         }
         internal static WirelessLayout Native(BatteryReading current,BatteryReading lastGood,DpiConfig dpi,HeadsetReading headset,AudioReading audio) {
             var audioCard=VisualDesign.AudioCardFor(headset,audio);var layout=Native(VisualDesign.ShouldShowHeadset(headset)||audioCard!=null,dpi);
-            foreach(var card in layout.All){if(card.NativeMouse)card.Battery=UiState.Mouse(current,lastGood,DateTime.UtcNow);else if(card.NativeHeadset){if(audioCard==null)card.Battery=UiState.Headset(headset,DateTime.UtcNow);else{card.Id="native:audio";card.Name="耳机";card.Subtitle=audioCard.Subtitle;card.NativeHeadset=false;card.AudioOnly=true;}}}
+            foreach(var card in layout.All){if(card.NativeMouse)card.Battery=UiState.Mouse(current,lastGood,DateTime.UtcNow);else if(card.NativeHeadset){if(audioCard==null)card.Battery=UiState.Headset(headset,DateTime.UtcNow);else{card.Id="native:audio";card.Name=UiState.CurrentOutputTitle;card.Subtitle=UiState.CurrentOutputName(audio);card.NativeHeadset=false;card.AudioOnly=true;}}}
             return layout;
         }
         internal GridControlGroup Group(WirelessCard card){return Groups.Find(delegate(GridControlGroup group){return group.Card==card&&!group.Audio;});}

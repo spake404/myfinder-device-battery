@@ -15,10 +15,11 @@ namespace AtkBattery {
     // Shared by the application, offline validation harness and local signing tool.
     // The production download path always supplies this constant, never settings or environment data.
     internal static class UpdateTrust {
-        internal const string PublicKeyXml = @"<RSAKeyValue><Modulus>5Rp+cdwPDCkEarIn8skfCaDyZ/wpPWKgeWyLNTDWrd3kkpOW9rcsLWrvyYObwQ8NNfnsGlqMYsc6BzOb6ZnUxTkDbwZAn+6QB9MEh8PrkG9PL4ZbcSco4dmr2hi9D5EurnIHpDCQd+75u4yMiMd93VprToE7w/sSOXXmHk602ny5TXtLdNTIWSRMT9RAZ5hxwFnRekflG1fmrxXyuO72gzRy7XVvNrHRa/TwrDVGMxg1djpYs7OFtZXTX6dszekah5OSg9d4or1fUK8ll71xBFTswiD4JQ/3tQ3y66MIjoKJM9KQp41Q4+WiXgKCnWe1vpZiM/IJlMB2agdjSmYfQoxBiWuL2dc0PAJrAeyuLBq348NnBw3ik7J7h9MbFMHsHG5oFyAZR10X+GPzsSAvLSiPvaNn3bnYE9NhKm6FMGJjRS1ecsQ+YUhRBatMjSwRDtbkGFmnadynp0GV5r2lyjZXeaF7PeLAXotPwUrXMriIj+1W4BhPVoe4X9M+BKqZ</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>";
+        internal const string PublicKeyXml = @"<RSAKeyValue><Modulus>ybvKqLkmXiKz585tmJ+XL07NHnr3Fep2qD+5fPhUQ/4ScP38YNbjQUBC9sy0b+bGdjzgLz73Cf6QoJ/IPoq3VFzUvVZHTpMtSvb4fK6m+pcQ5xRSgLmkD+aqYF3uZz6aAD3Yj3DcaC++KFpWwJMXwh7uAPPi0mLT66m3KolNIL4CHDDi9tgI6c8g/dnOHIfv05/6XxcpPquUKeqceSjM1qX0OWNNRm/9JOvtcJo2/OzVzWsQyRObZW+0XO21dq961qjXWTL43oDWFgaMrR0DgNZ6M17HGe8n2VLrwYllGITunHMCDfpOyEflDfk7SMWXK/FBAowQsWj4GUi8CsVLbdPvZEZfLwFjO6QgPv/An9vH53COk3m2w/6Y4vr/pCWtMPIhH/DjFoRyQEztxZDiwCsxluOMUFdYibfNaaEE0DTK3OIyYaty8m8UnFpdSQkACvWkL/oC/BXYBlXC4zFdPlAPQqv6AtWjUii4vadRYtUfFmCEDGP86Ax6CoVT3VZR</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>";
         internal const string AppId="myfinder-device-battery";
-        internal const string Repository="https://github.com/wushuai0802/myfinder-device-battery";
-        internal const string ApiUrl="https://api.github.com/repos/wushuai0802/myfinder-device-battery/releases";
+        internal const string RepositorySlug="spake404/myfinder-device-battery";
+        internal const string Repository="https://github.com/"+RepositorySlug;
+        internal const string ApiUrl="https://api.github.com/repos/"+RepositorySlug+"/releases";
         internal const long MaxDownloadBytes=100L*1024*1024;
         internal const long MaxExpandedBytes=512L*1024*1024;
         internal static string ZipName(string version){return "myfinder-device-battery-v"+UpdateVersion.Parse(version)+"-windows-x64.zip";}
@@ -62,6 +63,7 @@ namespace AtkBattery {
             UpdateRelease best=null;UpdateVersion bestVersion=installed;bool betas=includeBeta??installed.IsBeta;
             foreach(var item in releases??new UpdateRelease[0]){
                 UpdateVersion candidate;if(item==null||item.Draft||!UpdateVersion.TryParse(item.Version,out candidate)||!betas&&(item.Prerelease||candidate.IsBeta)||item.Version==skipped||candidate.CompareTo(bestVersion)<=0)continue;
+                try{ValidateAssets(item,item.Version);}catch(InvalidDataException){continue;}
                 best=item;bestVersion=candidate;
             }
             // A skipped version is excluded above, so skipping a beta still offers a lower stable.
@@ -171,7 +173,8 @@ namespace AtkBattery {
         internal static void ExtractAndValidate(string zipPath,string directory,string version,CancellationToken token){
             using(var input=new FileStream(zipPath,FileMode.Open,FileAccess.Read,FileShare.Read))ExtractAndValidateStream(input,directory,version,token);
         }
-        static void ExtractAndValidateStream(Stream input,string directory,string version,CancellationToken token){
+        internal static void ExtractAndValidateStream(Stream input,string directory,string version,CancellationToken token){
+            if(input.Length<1||input.Length>UpdateTrust.MaxDownloadBytes)throw new InvalidDataException("Invalid update archive size.");
             UpdateVersion.Parse(version);UpdatePaths.NoLinks(directory);if(Directory.Exists(directory)||File.Exists(directory))throw new InvalidDataException("Extraction requires a fresh directory.");
             try {
                 using(var zip=new ZipArchive(input,ZipArchiveMode.Read,true)){

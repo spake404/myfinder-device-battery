@@ -205,7 +205,7 @@ static class UiFeedbackTests {
             f.Owner.Audio.Devices=new[]{Endpoint("headphones",3),Endpoint("speaker",1),Endpoint("mic",4,1)};
             f.Popup.SyncDevices();
             var layout=WirelessLayout.Build(f.Owner,0,1000);var card=layout.All.Find(delegate(WirelessCard c){return c.Id=="native:audio";});
-            Check(card!=null&&card.Name=="耳机"&&card.Subtitle=="Endpoint headphones"&&(card.Battery==null||!card.Battery.Percent.HasValue),"audio card uses endpoint title with no battery in "+wireless);
+            Check(card!=null&&card.Name=="当前输出"&&card.Subtitle=="Endpoint speaker"&&card.Battery==null,"audio card shows the confirmed speaker with no battery in "+wireless);
             var controls=PopupPages.Build(f.Owner,new PopupNavigation(),false);foreach(int id in new[]{100,101,102})Check(controls.Exists(delegate(PopupControl c){return c.Id==id&&c.Enabled;}),"audio card has existing action "+id);
             var actual=f.Controls();bool disjoint=true;for(int i=0;i<actual.Count;i++)for(int j=i+1;j<actual.Count;j++)disjoint&=!actual[i].Rect.IntersectsWith(actual[j].Rect);
             Check(disjoint&&f.Popup.ClientSize.Height==(int)Math.Round((wireless?layout.Size.Height:VisualDesign.PanelSizeFor(true,f.Owner.Dpi).Height)*(float)Field(f.Popup,"dpiScale")),"plugged audio card has matching real popup size and nonoverlapping hit targets");
@@ -217,11 +217,32 @@ static class UiFeedbackTests {
             f.Owner.Audio.Devices=new[]{Endpoint("speaker",1)};Check(WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"replug restores bound card");
             pref.HeadsetEndpointId=null;DeviceSettings.UseTransientConfiguration(pref);f.Owner.Audio.Devices=new[]{Endpoint("headphones",3),Endpoint("second",5)};f.Owner.Audio.HeadsetAvailable=false;
             card=WirelessLayout.Build(f.Owner,0,1000).All.Find(delegate(WirelessCard c){return c.Id=="native:audio";});controls=PopupPages.Build(f.Owner,new PopupNavigation(),false);
-            Check(card!=null&&card.Subtitle.Contains("绑定")&&controls.Exists(delegate(PopupControl c){return c.Id==101&&!c.Enabled&&c.Detail.Contains("绑定");}),"ambiguous card guides explicit binding and disables headset action");
+            Check(card!=null&&card.Subtitle=="Speakers"&&controls.Exists(delegate(PopupControl c){return c.Id==101&&!c.Enabled&&c.Detail.Contains("绑定");}),"ambiguous headset preserves the current output while the headset action guides binding");
             f.Owner.Headset=new HeadsetReading {Connected=true,ConnectionVerified=true};Check(!WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"native headset suppresses duplicate controls");f.Owner.Headset=null;
             f.Owner.WirelessDevices=new[]{new WirelessDevice {Id=A,Name="Generic wireless headset",Kind="headset",Online=true}};Check(WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"generic headset still receives shared audio card");
             DeviceSettings.SetDeviceHidden(pref,"native:audio",true);DeviceSettings.UseTransientConfiguration(pref);Check(!WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.Id=="native:audio";}),"audio card respects persisted hide mechanism");
             Check(f.OutputWrites==0&&f.VolumeWrites==0,"audio discovery and hotplug never write audio");
+        }
+    }
+    static void CurrentOutputCard(){
+        foreach(string panelLayout in new[]{"bar","ring","grid"})foreach(bool wireless in new[]{false,true})using(var f=new Fixture(new AudioBindings {PanelLayout=panelLayout,HeadsetEndpointId="headphones",RememberReadings=false,ReducedMotion=true,VolumeCollapsed=true})){
+            f.Owner.GenericReady=wireless;
+            var scenario=panelLayout+"/"+wireless;
+            foreach(string outputId in new[]{"speaker","headphones","usb",null,"speaker"}){
+                var audio=Audio();audio.Devices=new[]{Endpoint("headphones",3),Endpoint("speaker",1),Endpoint("usb",1)};
+                audio.ActiveOutput="speaker";audio.ConsoleOutputId=outputId;
+                string expected=outputId==null?"未检测到系统输出":"Endpoint "+outputId;
+                f.Owner.Audio=audio;f.Popup.SyncDevices();
+                var rows=f.Controls();var header=rows.Find(delegate(PopupControl row){return row.Id==200;});
+                Check(header!=null&&header.Text=="当前输出"&&header.Value==expected&&header.AccessibleName=="当前输出，"+expected+"，打开音源与麦克风","visible action and accessible name follow confirmed output in "+scenario);
+                Check(rows.Exists(delegate(PopupControl row){return row.Id==101&&row.Enabled&&row.Detail=="Endpoint headphones";}),"headset button keeps its bound target in "+scenario);
+                var labels=new List<string>();CompactRenderer.LabelObserver=delegate(DrawnLabel label){labels.Add(label.Text);};
+                try{using(var bitmap=new Bitmap(480,800))using(var graphics=Graphics.FromImage(bitmap))Call(f.Popup,"PaintContent",graphics);}
+                finally{CompactRenderer.LabelObserver=null;}
+                Check(labels.Contains("当前输出")&&labels.Contains(expected),"main card paints current output title and device in "+scenario);
+            }
+            f.Click(f.Controls().Find(delegate(PopupControl row){return row.Id==200;}));
+            Check(f.Navigation.Page==PopupPage.Audio&&f.OutputWrites==0&&f.VolumeWrites==0,"header still opens audio settings without writing audio in "+scenario);
         }
     }
     static AudioDeviceChoice ReceiverEndpoint(string id,string product){
@@ -260,7 +281,7 @@ static class UiFeedbackTests {
             var card=VisualDesign.AudioCardFor(f.Owner.Headset,f.Owner.Audio);
             Check(card!=null&&card.EndpointId=="realtek"&&card.Subtitle==wired.Name,"only the remaining Realtek endpoint identifies the wired card");
             var layout=WirelessLayout.Build(f.Owner,0,1000);
-            Check(layout.All.Exists(delegate(WirelessCard c){return c.AudioOnly&&c.Subtitle==wired.Name;}),"wireless layout also uses the remaining wired endpoint");
+            Check(layout.All.Exists(delegate(WirelessCard c){return c.AudioOnly&&c.Subtitle=="Speakers";}),"remaining wired endpoint keeps the audio-only card visible while it displays the current speaker");
             f.Popup.SyncDevices();Check(f.Controls().Exists(delegate(PopupControl c){return c.Id==101&&c.Enabled&&c.Detail==wired.Name;}),"wired card controls use the same filtered card qualification");
         }
     }
@@ -308,12 +329,12 @@ static class UiFeedbackTests {
             f.Owner.WirelessDevices=new[]{new WirelessDevice {Id=A,Name="Acme Wireless",Kind="headset",ConnectionState="disconnected"}};
             var receiver=ReceiverEndpoint("acme","Acme Wireless");var wired=ReceiverEndpoint("realtek","Realtek(R) Audio");wired.Name="Realtek Headphones";
             f.Owner.Audio.Devices=new[]{receiver,wired};var layout=WirelessLayout.Build(f.Owner,0,1000);
-            Check(layout.All.Exists(delegate(WirelessCard c){return c.AudioOnly&&c.Subtitle==wired.Name;}),"an offline generic receiver leaves the unique wired endpoint as the card target");
+            Check(layout.All.Exists(delegate(WirelessCard c){return c.AudioOnly&&c.Subtitle=="Speakers";}),"an offline generic receiver does not hide the current output card when a wired headset remains");
             f.Popup.SyncDevices();Check(f.Controls().Exists(delegate(PopupControl c){return c.Id==101&&c.Detail==wired.Name;}),"generic receiver filtering also qualifies wired card controls");
             var pref=DeviceSettings.Current;pref.HeadsetEndpointId="acme";DeviceSettings.UseTransientConfiguration(pref);receiver.FormFactor=1;
             CheckAudioCardHidden(f,"explicitly bound offline generic receiver");
             pref.HeadsetEndpointId="realtek";DeviceSettings.UseTransientConfiguration(pref);
-            Check(WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.AudioOnly&&c.Subtitle==wired.Name;}),"an explicit wired binding remains visible beside an offline generic receiver");
+            Check(WirelessLayout.Build(f.Owner,0,1000).All.Exists(delegate(WirelessCard c){return c.AudioOnly&&c.Subtitle=="Speakers";}),"an explicit wired binding keeps the current output card visible beside an offline generic receiver");
         }
     }
     static void PagingAndClassicTray(){
@@ -337,5 +358,5 @@ static class UiFeedbackTests {
             }
         }
     }
-    [STAThread] static int Main(string[] args){output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Run("battery text fitting",BatteryTextFits);Run("configuration",Configuration);Run("active tray",ActiveTray);Run("volume layouts",VolumeLayouts);Run("collapsed volume targets",CollapsedVolumeTargets);Run("collapse during drag/queue",VolumeDuringDrag);Run("audio detection",AudioDetection);Run("automatic audio round trip",AutomaticAudioRoundTrip);Run("ambiguous speaker hint",AmbiguousSpeakerHint);Run("audio cards",AudioCards);Run("native receiver audio",NativeReceiverAudio);Run("native receiver with wired headphones",NativeReceiverWithWired);Run("native receiver identity",NativeReceiverIdentity);Run("bound native receiver",BoundNativeReceiver);Run("generic receiver audio",GenericReceiverAudio);Run("generic receiver with wired headphones and binding",GenericReceiverWithWiredAndBinding);Run("paging and classic tray",PagingAndClassicTray);if(failures==0)Run("previews",Previews);Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices/audio only");return failures==0?0:1;}
+    [STAThread] static int Main(string[] args){output=Path.GetFullPath(args[0]);Directory.CreateDirectory(output);Run("battery text fitting",BatteryTextFits);Run("configuration",Configuration);Run("active tray",ActiveTray);Run("volume layouts",VolumeLayouts);Run("collapsed volume targets",CollapsedVolumeTargets);Run("collapse during drag/queue",VolumeDuringDrag);Run("audio detection",AudioDetection);Run("automatic audio round trip",AutomaticAudioRoundTrip);Run("ambiguous speaker hint",AmbiguousSpeakerHint);Run("audio cards",AudioCards);Run("current output card",CurrentOutputCard);Run("native receiver audio",NativeReceiverAudio);Run("native receiver with wired headphones",NativeReceiverWithWired);Run("native receiver identity",NativeReceiverIdentity);Run("bound native receiver",BoundNativeReceiver);Run("generic receiver audio",GenericReceiverAudio);Run("generic receiver with wired headphones and binding",GenericReceiverWithWiredAndBinding);Run("paging and classic tray",PagingAndClassicTray);if(failures==0)Run("previews",Previews);Console.WriteLine(checks+" checks, "+failures+" failed groups; fake devices/audio only");return failures==0?0:1;}
 }

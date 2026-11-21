@@ -128,6 +128,7 @@ namespace AtkBattery {
     }
     internal sealed class FeedbackReplies {
         internal readonly FeedbackStore Store;
+        internal bool HasRelay {get{return !String.IsNullOrEmpty(relay);}}
         internal event Action<FeedbackBalloon> BalloonReady;
         readonly IFeedbackTransport http;readonly string relay;readonly Func<DateTime> clock;readonly Func<double> random;readonly Func<bool> enabled;
         readonly DateTime firstCheck;readonly int timeoutMilliseconds;
@@ -159,6 +160,7 @@ namespace AtkBattery {
         }
         internal FeedbackPollResult Poll(bool automatic,long? number,CancellationToken token){
             var result=new FeedbackPollResult();var now=clock();
+            if(!HasRelay){if(!automatic)result.Message="当前版本直接通过 GitHub Issues 提交反馈，请点击「在网页查看」查看回复。";return result;}
             if(automatic&&(!enabled()||now<firstCheck))return result;
             if(Interlocked.CompareExchange(ref polling,1,0)!=0){result.Message="正在刷新，请稍候。";return result;}
             try{
@@ -210,6 +212,7 @@ namespace AtkBattery {
             return result;
         }
         internal SupplementResult Supplement(long number,string description,string diagnostics,CancellationToken token){
+            if(!HasRelay)return new SupplementResult(SupplementKind.Unavailable);
             if(Interlocked.CompareExchange(ref supplementing,1,0)!=0)return new SupplementResult(SupplementKind.Busy);
             try{
                 var record=Store.Find(number);if(record==null||!record.MaySupplement)return new SupplementResult(SupplementKind.Denied);

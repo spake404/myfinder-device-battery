@@ -18,13 +18,13 @@ namespace AtkBatteryTray {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=6,Margin=Padding.Empty};layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             for(int i=0;i<6;i++)layout.RowStyles.Add(new RowStyle(i==3?SizeType.Percent:SizeType.AutoSize,i==3?100:0));
             var title=Caption("我的反馈",true);title.Name="FeedbackHistoryTitle";title.Dock=DockStyle.Fill;layout.Controls.Add(title,0,0);
-            var notice=Caption("在程序里提交的反馈和维护者回复，补充资料会公开显示在对应 issue 里。",false,true);
+            var notice=Caption(replies.HasRelay?"在程序里提交的反馈和维护者回复，补充资料会公开显示在对应 issue 里。":"当前版本直接通过本仓库 GitHub Issues 提交反馈和查看回复。",false,true);
             notice.Name="FeedbackHistoryNotice";notice.Dock=DockStyle.Fill;notice.Margin=new Padding(0,0,0,12);layout.Controls.Add(notice,0,1);
             listCard=new ThemedSection(Theme) {Dock=DockStyle.Fill};records=new RecordList(Theme);
             records.Name="FeedbackRecords";records.AccessibleName="我的反馈列表";records.Dock=DockStyle.Fill;records.IntegralHeight=false;records.HorizontalScrollbar=true;
             records.BackColor=Theme.Card;records.ForeColor=Theme.Foreground;records.BorderStyle=BorderStyle.None;records.DisplayMember="Text";
             records.SelectedIndexChanged+=delegate{if(!loading)SelectRecord();};listCard.Controls.Add(records);
-            emptyRecords=Caption("还没有在程序里提交过反馈",false,true);emptyRecords.Name="FeedbackHistoryEmpty";emptyRecords.Dock=DockStyle.Fill;emptyRecords.TextAlign=ContentAlignment.MiddleLeft;
+            emptyRecords=Caption(replies.HasRelay?"还没有在程序里提交过反馈":"当前通过本仓库 GitHub Issues 提交反馈",false,true);emptyRecords.Name="FeedbackHistoryEmpty";emptyRecords.Dock=DockStyle.Fill;emptyRecords.TextAlign=ContentAlignment.MiddleLeft;
             listCard.Controls.Add(emptyRecords);layout.Controls.Add(listCard,0,2);
             comments.Name="FeedbackComments";comments.AccessibleName="反馈回复";comments.ReadOnly=true;comments.Multiline=true;comments.WordWrap=true;comments.ScrollBars=ScrollBars.Vertical;
             var commentCard=new ThemedTextBox(Theme,comments) {Dock=DockStyle.Fill};layout.Controls.Add(commentCard,0,3);
@@ -100,15 +100,16 @@ namespace AtkBatteryTray {
             emptyRecords.Visible=records.Items.Count==0;if(emptyRecords.Visible)emptyRecords.BringToFront();SizeRecords();SelectRecord();
         }
         void SelectRecord(){
-            var record=Selected;comments.Text=record==null?"还没有在程序里提交过反馈":FeedbackText.Comments(record);
+            var record=Selected;
+            comments.Text=record!=null?FeedbackText.Comments(record):replies.HasRelay?"还没有在程序里提交过反馈":"当前版本已改为直接通过本仓库 GitHub Issues 提交反馈和查看回复：\r\n"+FeedbackClient.IssuesUrl+"\r\n\r\n可点击下方「在网页查看」打开 Issues 页面，或在「反馈问题」里填写描述并附带诊断信息后跳转到浏览器提交。";
             if(record!=null&&record.Unread>0)try{
                 replies.Store.MarkRead(record.Number);var entry=(Entry)records.SelectedItem;entry.Record=replies.Store.Find(record.Number);
                 loading=true;int index=records.SelectedIndex;records.Items[index]=entry;records.SelectedIndex=index;loading=false;
             }catch(Exception){loading=false;status.Text="未能保存已读状态，请稍后重试。";}
             Buttons();
         }
-        void Buttons(){var record=Selected;refresh.Enabled=!busy&&records.Items.Count>0;web.Enabled=record!=null;delete.Enabled=!busy&&record!=null;supplement.Enabled=!busy&&record!=null&&record.MaySupplement;}
-        void OpenWeb(){var record=Selected;if(record==null)return;try{open(FeedbackClient.IssueUrl(record.Number));}catch(Exception){status.Text="无法打开浏览器，请稍后重试。";}}
+        void Buttons(){var record=Selected;refresh.Enabled=!busy&&replies.HasRelay&&records.Items.Count>0;web.Enabled=record!=null||!replies.HasRelay;delete.Enabled=!busy&&record!=null;supplement.Enabled=!busy&&replies.HasRelay&&record!=null&&record.MaySupplement;}
+        void OpenWeb(){var record=Selected;string url=record!=null?FeedbackClient.IssueUrl(record.Number):(!replies.HasRelay?FeedbackClient.IssuesUrl:null);if(url==null)return;try{open(url);}catch(Exception){status.Text="无法打开浏览器，请稍后重试。";}}
         void Delete(){var record=Selected;if(record==null||busy||!confirm("仅删除此电脑上的反馈记录和补充凭证，不会删除 GitHub 上的 issue。确定删除吗？"))return;
             try{replies.Store.Delete(record.Number);status.Text="本地记录已删除。";Reload();}catch(Exception){status.Text="无法删除本地记录，请稍后重试。";}
         }

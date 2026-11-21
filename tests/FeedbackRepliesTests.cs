@@ -299,6 +299,16 @@ static class FeedbackRepliesTests {
             dialog.Reload(43);Check(!Find<Button>(dialog,"SupplementFeedback").Enabled&&comments.Text.Contains("此反馈只能在网页查看"),"keyless row is web-only");
             Find<Button>(dialog,"DeleteFeedbackRecord").PerformClick();Check(confirmed&&store.Find(43)==null&&http.Bodies.Count==0,"local deletion explicitly confirms and never touches the relay");dialog.Close();
         }
+        var noRelayHttp=new Http();var noRelayService=new FeedbackReplies(Store(),noRelayHttp);string issuesOpened=null;
+        Check(!noRelayService.HasRelay&&noRelayService.Poll(true,null,CancellationToken.None).Balloon==null&&noRelayService.Poll(false,null,CancellationToken.None).Message.Contains("GitHub Issues")&&noRelayService.Supplement(42,"valid supplement",null,CancellationToken.None).Kind==SupplementKind.Unavailable&&noRelayHttp.Bodies.Count==0,"default no-relay service never posts to upstream relay");
+        using(var dialog=new MyFeedbackDialog(noRelayService,Report(),false,delegate(string url){issuesOpened=url;})){
+            dialog.Opacity=0;dialog.Show();Application.DoEvents();
+            Check(Find<TextBox>(dialog,"FeedbackComments").Text.Contains(FeedbackClient.IssuesUrl),"no-relay history dialog displays our repository issues URL");
+            Check(Find<Button>(dialog,"OpenFeedbackWeb").Enabled&&!Find<Button>(dialog,"RefreshFeedbackReplies").Enabled&&!Find<Button>(dialog,"SupplementFeedback").Enabled,"no-relay history dialog enables opening repository issues while disabling relay-only actions");
+            Find<Button>(dialog,"OpenFeedbackWeb").PerformClick();
+            Check(issuesOpened=="https://github.com/spake404/myfinder-device-battery/issues","web button opens our repository issues page when no relay is configured");
+            dialog.Close();
+        }
         store=Store(Record());http=new Http {Reply=delegate{throw new WebException("timeout");}};var service=Service(store,http);
         using(var dialog=new FeedbackSupplementDialog(service,42,Report(),true)){
             dialog.Opacity=0;dialog.Show();Application.DoEvents();var input=Find<TextBox>(dialog,"SupplementDescription");var submit=Find<Button>(dialog,"SubmitSupplement");

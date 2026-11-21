@@ -1,5 +1,7 @@
 using System;
 using System.Diagnostics;
+using System.Drawing;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -174,6 +176,123 @@ static class TrayInteractionTests {
             fixture.Context.HandleTaskbarClick(0x0201,position);
             fixture.Context.HandleTaskbarClick(0x0202,position);
             Until(delegate{return panel.IsDisposed;},"second click dismisses the original panel");
+        }
+    }
+
+    static void TaskbarSettingsAnchor() {
+        using(var fixture=new Fixture(true)) {
+            var workArea=Screen.PrimaryScreen.WorkingArea;
+            var position=new System.Drawing.Point(workArea.Left+workArea.Width/2,Screen.PrimaryScreen.Bounds.Bottom-1);
+            var menu=fixture.Notify.ContextMenuStrip;
+            var settings=System.Linq.Enumerable.First(System.Linq.Enumerable.OfType<ToolStripMenuItem>(menu.Items),item=>item.Text=="设置…");
+            fixture.Context.HandleTaskbarClick(0x0205,position);
+            settings.PerformClick();
+            var panel=fixture.Current;
+            Check(panel!=null&&!panel.IsDisposed&&panel.CurrentPage=="Preferences","the taskbar menu opens the settings page");
+            Check((System.Drawing.Point)AnchorField.GetValue(panel)==position&&panel.Bottom>workArea.Top+workArea.Height/2,"settings opens beside the bottom taskbar, not at the launcher position");
+            var secondPosition=new System.Drawing.Point(position.X+60,position.Y);
+            fixture.Context.HandleTaskbarClick(0x0205,secondPosition);
+            settings.PerformClick();
+            Check(fixture.Current==panel&&(System.Drawing.Point)AnchorField.GetValue(panel)==secondPosition,"a subsequent settings open reanchors the existing panel");
+            menu.Close();
+        }
+    }
+
+    static void ContextMenuAppearance(string output) {
+        using(var fixture=new Fixture(true)) {
+            var menu=fixture.Notify.ContextMenuStrip;
+            var point=new Point(Screen.PrimaryScreen.WorkingArea.Left+180,Screen.PrimaryScreen.WorkingArea.Bottom-12);
+            var submenu=(ToolStripMenuItem)menu.Items[2];
+            var checkedItem=new ToolStripMenuItem("任务栏电量条") {Checked=true};
+            menu.Items.Insert(menu.Items.Count-2,checkedItem);
+            foreach(string theme in new[]{"light","dark"}) {
+                var settings=DeviceSettings.Current;settings.Theme=theme;DeviceSettings.UseTransientConfiguration(settings);
+                fixture.Context.HandleTaskbarClick(0x0205,point);
+                Check(menu.Renderer is TrayMenuStyle&&menu.Region!=null&&!menu.Region.IsVisible(0,0)&&menu.Region.IsVisible(menu.Width/2,menu.Height/2),"the visible menu has the panel renderer and a rounded window region");
+                Check(menu.Items[0].Height>=menu.Font.Height+8,"menu items have padded click targets");
+                var audio=(ToolStripDropDownMenu)submenu.DropDown;
+                var firstRole=(ToolStripMenuItem)audio.Items[0];
+                Check(audio.Renderer is TrayMenuStyle&&firstRole.DropDown.Renderer is TrayMenuStyle,"both audio submenu levels share the menu style");
+                using(var image=new Bitmap(menu.Width,menu.Height)) {
+                    menu.DrawToBitmap(image,menu.ClientRectangle);
+                    var palette=ThemePalette.Current(theme=="dark");
+                    Check(image.GetPixel(menu.Width/2,4).ToArgb()==palette.Card.ToArgb(),"menu surface follows the panel theme");
+                    var symbolRow=menu.Items[0].Bounds;
+                    var checkRow=checkedItem.Bounds;
+                    float scale=NativeDisplay.ScaleAt(point),tolerance=3*scale;
+                    int column=(int)Math.Round(28*scale),textRight=image.Width-(int)Math.Round(46*scale);
+                    var symbol=MenuInkBounds(image,new Rectangle(image.Width-column,symbolRow.Y+3,column-5,symbolRow.Height-6),palette.Card);
+                    var check=MenuInkBounds(image,new Rectangle(image.Width-column,checkRow.Y+3,column-5,checkRow.Height-6),palette.Card);
+                    var label=MenuInkBounds(image,new Rectangle(8,symbolRow.Y+3,textRight-8,symbolRow.Height-6),palette.Card);
+                    var checkedLabel=MenuInkBounds(image,new Rectangle(8,checkRow.Y+3,textRight-8,checkRow.Height-6),palette.Card);
+                    if(output!=null)image.Save(Path.Combine(output,"tray-context-menu-"+theme+".png"));
+                    Check(!symbol.IsEmpty&&!check.IsEmpty&&!label.IsEmpty&&!checkedLabel.IsEmpty&&
+                        Math.Abs((symbol.Top+symbol.Bottom)-(label.Top+label.Bottom))<=2*tolerance&&
+                        Math.Abs((check.Top+check.Bottom)-(checkedLabel.Top+checkedLabel.Bottom))<=2*tolerance&&
+                        Math.Abs((symbol.Left+symbol.Right)-(check.Left+check.Right))<=2*tolerance,
+                        "the right-side symbols and check marks align with their text and share a column: "+theme+" "+symbol+" "+label+" "+check+" "+checkedLabel);
+                }
+                submenu.ShowDropDown();
+                Check(audio.Visible&&audio.Region!=null&&!audio.Region.IsVisible(0,0),"the opened audio submenu also has rounded corners");
+                menu.Close();
+            }
+            try {
+                VisualDesign.HighContrastOverride=true;
+                fixture.Context.HandleTaskbarClick(0x0205,point);
+                Check(menu.Region==null,"high contrast uses an unclipped rectangle");
+                menu.Close();
+            } finally {VisualDesign.HighContrastOverride=null;}
+        }
+    }
+
+    static Rectangle MenuInkBounds(Bitmap image,Rectangle region,Color surface) {
+        region.Intersect(new Rectangle(4,4,image.Width-8,image.Height-8));
+        int left=region.Right,top=region.Bottom,right=region.Left,bottom=region.Top;
+        for(int y=region.Top;y<region.Bottom;y++)for(int x=region.Left;x<region.Right;x++){
+            var pixel=image.GetPixel(x,y);
+            if(Math.Abs(pixel.R-surface.R)+Math.Abs(pixel.G-surface.G)+Math.Abs(pixel.B-surface.B)<100)continue;
+            left=Math.Min(left,x);top=Math.Min(top,y);right=Math.Max(right,x+1);bottom=Math.Max(bottom,y+1);
+        }
+        return right>left&&bottom>top?Rectangle.FromLTRB(left,top,right,bottom):Rectangle.Empty;
+    }
+
+    static void ContextMenuDismissal() {
+        using(var menu=new ContextMenuStrip())
+        using(var dismissal=new TrayMenuDismissal(menu)) {
+            TrayMenuStyle.Attach(menu);
+            var audio=new ToolStripMenuItem("音源设置");
+            audio.DropDownItems.Add(new ToolStripMenuItem("扬声器按钮"));
+            menu.Items.Add(audio);
+            var work=Screen.PrimaryScreen.WorkingArea;
+            var origin=new Point(work.Left+160,work.Top+120);
+            var outside=new Point(work.Left+5,work.Top+5);
+            var externalWindow=new IntPtr(123);
+            var foreground=externalWindow;
+            const int mousePress=2;
+            menu.Show(origin);
+            dismissal.Begin(foreground,mousePress);
+            dismissal.Observe(foreground,mousePress,outside);
+            Check(menu.Visible,"the button already held at opening does not dismiss the menu");
+            dismissal.Observe(foreground,0,outside);
+            var inside=new Point(menu.Left+menu.Width/2,menu.Top+menu.Height/2);
+            dismissal.Observe(foreground,mousePress,inside);
+            Check(menu.Visible,"a new press in the menu does not trigger outside dismissal");
+            dismissal.Observe(foreground,0,inside);
+            audio.ShowDropDown();
+            var child=audio.DropDown;
+            var insideChild=new Point(child.Left+child.Width/2,child.Top+child.Height/2);
+            dismissal.Observe(child.Handle,mousePress,insideChild);
+            Check(menu.Visible&&child.Visible,"a press and foreground activation in an audio submenu keep the tree open");
+            dismissal.Observe(child.Handle,0,insideChild);
+            dismissal.Observe(child.Handle,mousePress,outside);
+            Check(!menu.Visible&&!child.Visible,"an outside press dismisses the whole tree even if foreground does not change");
+
+            menu.Show(origin);
+            dismissal.Begin(externalWindow,0);
+            dismissal.Observe(IntPtr.Zero,0,outside);
+            Check(menu.Visible,"a transient missing foreground while opening is ignored");
+            dismissal.Observe(new IntPtr(456),0,outside);
+            Check(!menu.Visible,"switching to another application dismisses the menu");
         }
     }
 
@@ -409,6 +528,9 @@ static class TrayInteractionTests {
             if(Array.IndexOf(args,"--lifecycle-only")>=0){Run("popup native handle lifecycle",PopupHandleLifecycle);Run("captured target replaced before release",ReplacedTarget);Console.WriteLine("PASS "+checks+" hidden lifecycle/replacement checks");return 0;}
             Run("popup native handle lifecycle",PopupHandleLifecycle);
             Run("taskbar strip uses existing panel and click location",TaskbarStripClick);
+            Run("context settings opens at the original taskbar click",TaskbarSettingsAnchor);
+            Run("right-click menu and audio submenu use the shared panel theme",delegate{ContextMenuAppearance(args.Length>0&&Directory.Exists(args[0])?args[0]:null);});
+            Run("right-click menu dismisses on outside presses and foreground changes",ContextMenuDismissal);
             Run("slow tray open/close",SlowClicks);
             Run("actual NotifyIcon fast double-click callback sequence",FastDoubleClick);
             Run("deactivation before tray down",DeactivateBeforeDown);

@@ -18,9 +18,13 @@ $originalPath = $env:Path
 try {
     $env:Path = (Split-Path -Parent $nativeCompiler)+';'+$originalPath
     & $nativeCompiler -std=c++17 -Os -shared -static -s -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 `
-        -o $widgetLibrary (Join-Path $widgetSources 'widget.cpp') (Join-Path $widgetSources 'brands.cpp') (Join-Path $widgetSources 'bridge.cpp') `
+        -o $widgetLibrary (Join-Path $widgetSources 'widget.cpp') (Join-Path $widgetSources 'brands.cpp') (Join-Path $widgetSources 'bridge.cpp') (Join-Path $widgetSources 'reserve.cpp') `
         -lcomctl32 -lgdi32 -lole32 -loleaut32 -ladvapi32 -luuid
     if($LASTEXITCODE -ne 0){throw 'Taskbar renderer build failed.'}
+    & $nativeCompiler -std=c++17 -Os -shared -static -s -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 `
+        -o (Join-Path $buildOutput 'MyFinderTaskbarReserve.dll') (Join-Path $widgetSources 'reserve_tap.cpp') `
+        -lole32 -loleaut32 -luuid
+    if($LASTEXITCODE -ne 0){throw 'Taskbar reserve build failed.'}
 } finally {
     $env:Path = $originalPath
 }
@@ -65,6 +69,6 @@ try {
     $env:Path = $originalPath
 }
 $buildInfo=[ordered]@{schema=2;version=$release.version;releaseSha256=(Get-FileHash -LiteralPath (Join-Path $projectRoot 'release.json') -Algorithm SHA256).Hash.ToLowerInvariant();
-    files=@('AtkMouseBattery.exe','AtkBatteryProbe.exe','MyFinderTaskbar.dll' | ForEach-Object {[pscustomobject]@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $buildOutput $_) -Algorithm SHA256).Hash.ToLowerInvariant()}});
+    files=@('AtkMouseBattery.exe','AtkBatteryProbe.exe','MyFinderTaskbar.dll','MyFinderTaskbarReserve.dll' | ForEach-Object {[pscustomobject]@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $buildOutput $_) -Algorithm SHA256).Hash.ToLowerInvariant()}});
     sources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Sort-Object Name | ForEach-Object {[pscustomobject]@{path=('scripts/'+$_.Name);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}})+@(Get-ChildItem -LiteralPath $widgetSources -File | Sort-Object Name | ForEach-Object {[pscustomobject]@{path=('native/batteryhub/'+$_.Name);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}})+@($iconRelative,$manifestRelative,'engine/device_pack_schema.json' | ForEach-Object {[pscustomobject]@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $projectRoot $_) -Algorithm SHA256).Hash.ToLowerInvariant()}})}
 [IO.File]::WriteAllText((Join-Path $buildOutput 'build-info.json'),($buildInfo | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))

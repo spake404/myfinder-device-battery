@@ -172,7 +172,7 @@ static class UpdateTests {
             Check(http.Requests.Count==0&&body.Reads==0,"pre-cancelled transfer sends no HTTP");
         }
     }
-    static UpdateAsset Asset(string version,string name){return new UpdateAsset {Name=name,Size=100,Url="https://github.com/wushuai0802/myfinder-device-battery/releases/download/v"+version+"/"+name};}
+    static UpdateAsset Asset(string version,string name){return new UpdateAsset {Name=name,Size=100,Url="https://github.com/spake404/myfinder-device-battery/releases/download/v"+version+"/"+name};}
     static UpdateRelease Release(string version,bool pre=false){return new UpdateRelease {Tag="v"+version,Prerelease=pre,Body="<script>bad()</script>\r\n[click](file:///C:/x)",Assets=new[]{Asset(version,UpdateTrust.ZipName(version)),Asset(version,"SHA256SUMS.txt"),Asset(version,"SHA256SUMS.txt.sig")}};}
     static void PlainReleaseNotes(){
         foreach(string text in new[]{"<script>bad()</script>\r\n[click](file:///C:/x)",@"{\rtf1\ansi\b This must remain literal RTF text\b0}","https://example.invalid/\r\nfile:///C:/x\r\n[click](javascript:bad())"}){
@@ -288,6 +288,11 @@ static class UpdateTests {
             Check(UpdateDialog.Notes("#123 和 C# 保持原样")=="#123 和 C# 保持原样","issue numbers are not mistaken for headings");
             var foreign=Release("1.3.5");foreign.Assets[0].Url="https://github.com/other/repo/releases/download/v1.3.5/"+UpdateTrust.ZipName("1.3.5");
             Reject(()=>UpdateCatalog.ValidateAssets(foreign,"1.3.5"),"foreign repository asset");
+        Check(UpdateTrust.ApiUrl=="https://api.github.com/repos/spake404/myfinder-device-battery/releases","update discovery uses the maintained fork");
+        var upstream=Release("9.0.0");foreach(var asset in upstream.Assets)asset.Url=asset.Url.Replace("spake404/","wushuai0802/");
+        Reject(()=>UpdateCatalog.ValidateAssets(upstream,"9.0.0"),"legacy upstream assets cannot install in the fork");
+        var unsigned=Release("9.1.0");unsigned.Assets=unsigned.Assets.Where(asset=>asset.Name!="SHA256SUMS.txt.sig").ToArray();
+        Check(UpdateCatalog.Select(new[]{unsigned,upstream,stable},"1.3.4",null)==stable,"incomplete and upstream releases do not hide a usable release");
             var renamed=Release("1.3.5");renamed.Assets[0].Name="MyFinder-device-battery-v1.3.5-windows-x64.zip";Reject(()=>UpdateCatalog.ValidateAssets(renamed,"1.3.5"),"asset filename is case exact");
             var now=new DateTime(2026,1,2,0,0,0,DateTimeKind.Utc);
             UpdateBackoffPolicy(root);

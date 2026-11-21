@@ -74,7 +74,7 @@ static class CardsFeedbackTests {
     [STAThread] static int Main(string[] args){
         TrayContext owner=null;
         try {
-            var settings=new AudioBindings {RememberReadings=false,LowBatteryNotifications=false,TrayDeviceId=B,MouseAlias="PRIVATE-ALIAS",HeadsetAlias="PRIVATE-HEADSET"};
+            var settings=new AudioBindings {RememberReadings=false,LowBatteryNotifications=false,TrayDeviceId=B,TrayHideWhenDisconnected=false,MouseAlias="PRIVATE-ALIAS",HeadsetAlias="PRIVATE-HEADSET"};
             settings.DeviceAliases[A]="PRIVATE-CARD-ALIAS";DeviceSettings.UseTransientConfiguration(settings);
             owner=new TrayContext(false,delegate(bool battery){return new MouseSnapshot();},delegate(int s){throw new Exception("No DPI writes");});
             owner.NativeMousePresent=false;
@@ -106,7 +106,7 @@ static class CardsFeedbackTests {
             Check(full.Contains("Raw 中文 & # Mouse")&&full.Contains(AppRuntime.Version)&&full.Contains("Windows"),"raw name and versions are included");
             foreach(string secret in new[]{"PRIVATE-ALIAS","PRIVATE-CARD-ALIAS","PRIVATE-HEADSET",A,B,"physicalId","当前实例"})Check(!full.Contains(secret),"private field absent: "+secret);
             string encoded=FeedbackReport.EncodeUrl("中文 & #\nTitle","中文 & #\nBody");
-            Check(encoded.StartsWith("https://github.com/wushuai0802/myfinder-device-battery/issues/new?template=device-request.yml&title="),"fixed issue template URL");
+            Check(encoded.StartsWith("https://github.com/spake404/myfinder-device-battery/issues/new?template=device-request.yml&title="),"fixed issue template URL");
             Check(Decode(encoded)=="中文 & #\nBody"&&encoded.Contains("%26")&&encoded.Contains("%23")&&encoded.Contains("%0A"),"values are encoded without query/fragment injection");
             int opened=0;string copied=null;var order=new List<string>();
             report=owner.CreateFeedbackReport();Check(opened==0,"constructing report and page never launches browser");

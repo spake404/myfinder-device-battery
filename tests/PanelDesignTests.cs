@@ -538,6 +538,27 @@ static class PanelDesignTests {
         }
         VisualDesign.HighContrastOverride=false;
     }
+    static void OutputVolumeRing(){
+        foreach(bool wireless in new[]{false,true})foreach(bool dark in new[]{false,true}){
+            Mode("normal","ocean",false,"ring");using(var fixture=new Fixture()){
+                var owner=fixture.Owner;owner.Headset=null;owner.GenericReady=wireless;
+                owner.Audio.Devices=new[]{new AudioDeviceChoice {Id="headset",Name="耳机",Flow=0,FormFactor=3}};
+                var layout=WirelessLayout.Build(owner,0,10000);var card=layout.All.Find(delegate(WirelessCard item){return item.AudioOnly;});
+                Check(card!=null,"volume ring has an audio-only card");
+                var ring=Rectangle.Round(VisualDesign.BatteryRingRect(card.Top));var volume=wireless?layout.VolumeRect:VisualDesign.SystemVolumeRectFor(true,owner.Dpi);
+                var track=Rectangle.Round(VisualDesign.MainVolumeTrack(VisualDesign.VolumeSliderRect(volume)));var accent=PopupPages.Blue(dark);
+                Func<PanelFeedback,int> ringPixels=delegate(PanelFeedback feedback){using(var image=Render(owner,wireless,dark,feedback))return ColorPixels(image,ring,accent);};
+                owner.Audio.OutputVolumePercent=0;Check(ringPixels(new PanelFeedback())==0,"zero volume leaves the track empty");
+                owner.Audio.OutputVolumePercent=25;
+                int quarter=ringPixels(new PanelFeedback());int preview=ringPixels(new PanelFeedback {VolumePreview=75});
+                using(var image=Render(owner,wireless,dark,new PanelFeedback {VolumePreview=75}))Check(ColorPixels(image,track,accent)>0&&preview>quarter&&quarter>0,"ring and slider share their accent color, and the ring follows the drag preview");
+                owner.Audio.OutputVolumePercent=75;Check(ringPixels(new PanelFeedback())==preview,"confirmed volume and the same preview render identically");
+                owner.Audio.OutputVolumePercent=100;Check(ringPixels(new PanelFeedback())>preview,"full volume fills more of the ring than 75 percent");
+                Check(ringPixels(new PanelFeedback {AudioBlocked=true,VolumePreview=75})==0,"unconfirmed audio control cannot paint a preview");
+                owner.Audio.VolumeEndpointId=null;Check(ringPixels(new PanelFeedback {VolumePreview=75})==0,"missing output endpoint leaves the ring empty");
+            }
+        }
+    }
     static void RingNamesAndTypography(){
         foreach(string font in new[]{"normal","large"})foreach(float scale in new[]{1f,1.25f,1.5f,1.75f,2f}){
             Mode(font,"ocean",false,"ring");using(var fixture=new Fixture())using(var host=new Control()){
@@ -768,6 +789,7 @@ static class PanelDesignTests {
         if(args.Length==1&&args[0]=="--grid")return failures==0?0:1;
         Run("layout defaults, migration, persistence and normalization",LayoutSettings);Run("ring geometry, full-row details and calculated heights",RingGeometry);
         Run("ring draw and hit geometry",delegate{HitGeometry("ring");});Run("ring color, font, headset, contrast and render path matrix",delegate{RenderMatrix("ring");});Run("ring tiny, full, cached, sleeping and charging boundaries",RingBoundaries);Run("ring state accessibility and typography at five DPI scales",RingNamesAndTypography);
+        Run("current output volume ring matches the system slider",OutputVolumeRing);
         Run("ring paging reserves volume and the external footer",delegate{FooterPaging("ring");});
         if(args.Length==1&&args[0]=="--ring")return failures==0?0:1;
         VisualDesign.HighContrastOverride=false;Mode("normal");Run("battery bar proportions and bounds",BarGeometry);Run("battery digits and percent baselines at five DPI scales",BatteryTypography);Run("shared draw and hit geometry",HitGeometry);Run("four themes x light/dark x fonts x headset x high contrast x render paths",RenderMatrix);Run("card shadows and high contrast",ContrastAndShadows);Run("icon-only microphone accessible state",MicrophoneNames);Run("microphone pending and unavailable ink",MicrophonePresentation);Run("floating segmented controls",FloatingSegments);Run("pending hints, press offset and segment focus",PendingSegments);Run("plain footer and single-row volume",PlainFooterAndVolume);Run("bounded device page footer geometry",FooterPaging);

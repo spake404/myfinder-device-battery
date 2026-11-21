@@ -157,7 +157,12 @@ static class UpdateBadgeTests {
         }
         internal List<PopupControl> Rows(PopupPage page){return PopupPages.Build(Owner,new PopupNavigation {Page=page,VisibleChoices=100},false);}
         internal UpdateDialog Dialog {get{return (UpdateDialog)Field(Updates,"dialog");}}
-        internal void Seen(){Pump(delegate{return Dialog!=null&&Dialog.Visible&&UpdateJson.ReadFile<UpdateState>(Path.Combine(DirectoryPath,"update-state.json"),65536).SeenVersion=="99.0.1";});Check(Updates.Available&&Rows(PopupPage.More).Exists(r=>r.Id==260),"viewed offer remains in panel");Check(Updates.BadgeVisible==(DeviceSettings.Current.ShowUpdateBadge&&DeviceSettings.Current.AutoCheckUpdates),"viewing preserves badge according to both settings");Check(UpdateJson.ReadFile<UpdateState>(Path.Combine(DirectoryPath,"update-state.json"),65536).SeenVersion=="99.0.1","exact dialog version persisted");}
+        bool SeenOnDisk(){
+            try{using(var stream=new FileStream(Path.Combine(DirectoryPath,"update-state.json"),FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))
+                using(var buffer=new MemoryStream()){stream.CopyTo(buffer);return UpdateJson.Read<UpdateState>(buffer.ToArray()).SeenVersion=="99.0.1";}}
+            catch(IOException error){int code=error.HResult&0xffff;if(code!=32&&code!=33)throw;return false;}
+        }
+        internal void Seen(){Pump(delegate{return Dialog!=null&&Dialog.Visible&&SeenOnDisk();});Check(Updates.Available&&Rows(PopupPage.More).Exists(r=>r.Id==260),"viewed offer remains in panel");Check(Updates.BadgeVisible==(DeviceSettings.Current.ShowUpdateBadge&&DeviceSettings.Current.AutoCheckUpdates),"viewing preserves badge according to both settings");Check(SeenOnDisk(),"exact dialog version persisted");}
         public void Dispose(){Owner.ExitThread();Owner.Dispose();if(!Popup.IsDisposed)Popup.Dispose();}
     }
     static void Ui(){

@@ -39,11 +39,11 @@ namespace AtkBatteryTray {
             if(VisualDesign.ShouldShowHeadset(owner.Headset))layout.All.Add(new WirelessCard {Id="native:headset",Name=pref.HeadsetAlias,Kind="headset",Battery=UiState.Headset(owner.Headset,now),NativeHeadset=true});
             else {
                 var audio=UiState.AudioCard(owner.Audio,pref,owner.Headset,owner.WirelessDevices);
-                if(audio!=null)layout.All.Add(new WirelessCard {Id="native:audio",Name="耳机",Kind="headset",Subtitle=audio.Subtitle,AudioOnly=true});
+                if(audio!=null)layout.All.Add(new WirelessCard {Id="native:audio",Name=UiState.CurrentOutputTitle,Kind="headset",Subtitle=UiState.CurrentOutputName(owner.Audio),AudioOnly=true});
             }
             var hidden=new HashSet<string>(pref.HiddenDeviceIds,StringComparer.Ordinal);
             if(includeHidden)foreach(string id in pref.HiddenDeviceIds)if(!layout.All.Exists(delegate(WirelessCard card){return card.Id==id;})) {
-                string alias;string name=id=="native:mouse"?pref.MouseAlias:id=="native:headset"?pref.HeadsetAlias:id=="native:audio"?"耳机":pref.DeviceAliases.TryGetValue(id,out alias)?alias:"已隐藏设备";
+                string alias;string name=id=="native:mouse"?pref.MouseAlias:id=="native:headset"?pref.HeadsetAlias:id=="native:audio"?UiState.CurrentOutputTitle:pref.DeviceAliases.TryGetValue(id,out alias)?alias:"已隐藏设备";
                 layout.All.Add(new WirelessCard {Id=id,Name=name,Kind="device",Battery=new BatteryView {Name=name},Subtitle="设备未连接"});
             }
             var discovered=new List<WirelessCard>(layout.All);layout.All.Clear();var added=new HashSet<string>(StringComparer.Ordinal);

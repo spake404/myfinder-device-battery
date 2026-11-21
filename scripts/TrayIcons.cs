@@ -8,10 +8,14 @@ using AtkBattery;
 
 namespace AtkBatteryTray {
     internal static class TraySelection {
-        internal static WirelessCard Select(IEnumerable<WirelessCard> candidates,string source,string fixedId,string activePhysicalId,bool activeNative,string previousId,bool groupRules=false){
-            var available=new List<WirelessCard>();foreach(var card in candidates)if(card!=null&&card.Battery!=null&&!card.AudioOnly&&card.Id!="empty")available.Add(card);
+        internal static bool Connected(WirelessCard card){return card.Device==null||card.Device.Online&&card.Device.ConnectionState!="disconnected";}
+        internal static WirelessCard Select(IEnumerable<WirelessCard> candidates,string source,string fixedId,string activePhysicalId,bool activeNative,string previousId,bool groupRules=false,bool requireConnected=false){
+            var available=new List<WirelessCard>();foreach(var card in candidates)if(card!=null&&card.Battery!=null&&!card.AudioOnly&&card.Id!="empty"&&(!requireConnected||Connected(card)))available.Add(card);
             WirelessCard selected=null;
-            if(!String.IsNullOrEmpty(fixedId))selected=available.Find(delegate(WirelessCard card){return card.Id==fixedId&&card.Battery.Fresh&&card.Battery.Percent.HasValue;});
+            if(!String.IsNullOrEmpty(fixedId)){
+                selected=available.Find(delegate(WirelessCard card){return card.Id==fixedId&&(requireConnected||card.Battery.Fresh&&card.Battery.Percent.HasValue);});
+                if(requireConnected)return selected;
+            }
             bool fixedSelected=selected!=null;
             if(source=="active"){
                 bool current=available.Exists(delegate(WirelessCard card){return card.Battery.Fresh&&card.Battery.Percent.HasValue;});
@@ -61,10 +65,11 @@ namespace AtkBatteryTray {
     internal sealed class NativeTrayIcon:ITrayIcon {
         readonly NotifyIcon tray;readonly bool visible;
         Icon icon;string lastKey,lastTooltip;
-        bool suppressed, balloon;
+        bool suppressed, balloon, hidden;
         [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
         internal NativeTrayIcon(NotifyIcon tray,bool visible){this.tray=tray;this.visible=visible;}
         public bool Update(TrayView view,bool dark,int size){
+            hidden=view.Hidden;
             var battery=view.Battery;bool taskbarDark=Style.TaskbarDark;
             string key=battery.Key+"|"+view.DeviceKind+"|"+view.BrandAccent+"|"+dark+"|"+size+"|"+view.UpdateBadge+"|"+(view.UpdateBadge?view.UpdateColor.ToArgb():0)+"|"+taskbarDark;bool changed=key!=lastKey;
             if(changed){
@@ -78,7 +83,8 @@ namespace AtkBatteryTray {
             if(view.Tooltip!=lastTooltip){tray.Text=view.Tooltip;lastTooltip=view.Tooltip;}
             ApplyVisibility();return changed;
         }
-        void ApplyVisibility(){tray.Visible=visible&&icon!=null&&(!suppressed||balloon);}
+        void ApplyVisibility(){tray.Visible=visible&&icon!=null&&ShouldShow(hidden,suppressed,balloon);}
+        internal static bool ShouldShow(bool hidden,bool suppressed,bool balloon){return balloon||!hidden&&!suppressed;}
         public void Suppress(bool value){suppressed=value;ApplyVisibility();}
         internal void ShowBalloon(string title,string text,ToolTipIcon type){balloon=true;ApplyVisibility();tray.ShowBalloonTip(5000,title,text,type);}
         internal void EndBalloon(){balloon=false;ApplyVisibility();}

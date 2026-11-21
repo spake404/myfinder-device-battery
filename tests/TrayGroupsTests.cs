@@ -125,6 +125,47 @@ static class TrayGroupsTests {
             Check(views.Count==1&&views[0].DeviceKind=="headset","changing the first group's rule replaces its displayed device");
         }
     }
+    static void HideDisconnected(){
+        var legacy=Load(",\"TrayGroups\":[{\"Id\":\"g2\"}]");
+        Check(legacy.TrayHideWhenDisconnected&&legacy.TrayGroups[0].HideWhenDisconnected,"old settings enable hiding on each existing icon");
+        var malformed=Load(",\"TrayHideWhenDisconnected\":[],\"TrayGroups\":[{\"Id\":\"g2\",\"HideWhenDisconnected\":\"false\"}]");
+        Kept(malformed);Check(malformed.TrayHideWhenDisconnected&&malformed.TrayGroups[0].HideWhenDisconnected,"malformed preferences fall back to on locally");
+        string path=Path.Combine(output,"tray-hide-roundtrip.json");legacy.TrayHideWhenDisconnected=false;legacy.TrayGroups[0].HideWhenDisconnected=false;
+        DeviceSettings.SaveBindings(path,legacy.Clone());var loaded=DeviceSettings.LoadBindings(path);
+        Check(!loaded.TrayHideWhenDisconnected&&!loaded.TrayGroups[0].HideWhenDisconnected,"turning off hiding survives clone and reload");
+        using(var fixture=new Fixture()){
+            var owner=fixture.Owner;var preferences=DeviceSettings.Current;var group=TrayConfiguration.Add(preferences);
+            Check(group.HideWhenDisconnected,"new icons default to hiding when disconnected");
+            preferences.TrayDeviceId="mouse";group.DeviceId="headset";TrayConfiguration.Move(preferences,"headset",group.Id);TrayConfiguration.Move(preferences,"keyboard",group.Id);
+            var mouse=Card("mouse","mouse",75);var headset=Card("headset","headset",40);var keyboard=Card("keyboard","keyboard",10);
+            var candidates=new List<WirelessCard>{mouse,headset,keyboard};
+            Func<List<TrayView>> views=delegate{return owner.BuildTrayViews(DeviceSettings.Current,new BatteryView(),new BatteryView(),candidates);};
+            DeviceSettings.UseTransientConfiguration(preferences);
+            fixture.Page(PopupPage.TrayGroup);fixture.Nav.TrayGroupKey=group.Id;
+            var toggle=fixture.Find("tray:hide-disconnected",group.Id);
+            Check(toggle.Toggle&&toggle.Checked&&toggle.Text=="断开时隐藏图标","group page shows the enabled switch");
+            Check(TaskbarStrip.VisibleViews(views()).Count==2&&views()[1].DeviceKind=="headset","fixed headset wins over another connected member");
+            headset.Device.ConnectionState="disconnected";
+            var hidden=views();Check(hidden[1].Hidden&&TaskbarStrip.VisibleViews(hidden).Count==1&&hidden[0].DeviceKind=="mouse","explicit disconnect hides only the fixed icon even with a connected backup and cached battery");
+            fixture.Click(toggle);
+            Check(!fixture.Find("tray:hide-disconnected",group.Id).Checked&&DeviceSettings.Current.TrayHideWhenDisconnected&&fixture.Nav.Page==PopupPage.TrayGroup,"toggling one icon saves without changing another or leaving the page");
+            Check(!views()[1].Hidden&&views()[1].DeviceKind=="keyboard","switching the setting off restores legacy fallback");
+            fixture.Click(fixture.Find("tray:hide-disconnected",group.Id));
+            headset.Device.ConnectionState="connected";headset.Battery.Percent=null;headset.Battery.Fresh=false;
+            Check(!views()[1].Hidden&&views()[1].DeviceKind=="headset"&&views()[1].Battery.Percent==null,"reconnect restores the fixed icon before a fresh battery reading");
+            headset.Device.ConnectionState="sleeping";
+            Check(!views()[1].Hidden,"a connected sleeping headset is not treated as disconnected");
+            candidates.Remove(headset);mouse.Device.Online=false;
+            Check(TaskbarStrip.VisibleViews(views()).Count==0,"missing fixed device and offline primary can hide all slots");
+            preferences=DeviceSettings.Current;preferences.TrayGroups[0].DeviceId=null;DeviceSettings.UseTransientConfiguration(preferences);
+            Check(!views()[1].Hidden&&views()[1].DeviceKind=="keyboard","automatic group can switch to a remaining connected member");
+            keyboard.Device.Online=false;
+            Check(views()[1].Hidden,"automatic group hides once all its configured members are offline");
+            fixture.Nav.TrayGroupKey=TrayConfiguration.FirstId;fixture.Click(fixture.Find("tray:hide-disconnected",TrayConfiguration.FirstId));
+            Check(!views()[0].Hidden&&views()[1].Hidden,"the primary icon can independently keep its disconnected placeholder");
+        }
+        Check(!NativeTrayIcon.ShouldShow(true,false,false)&&!NativeTrayIcon.ShouldShow(true,true,false)&&NativeTrayIcon.ShouldShow(false,false,false),"native fallback and strip suppression cannot unhide a disconnected icon");
+    }
     static void BrandColors(){
         if(File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"MyFinderTaskbar.dll"))){
             Check(TrayBrand.Resolve("auto","logitech",0x1532,"Razer Mouse","mouse")==2,"a recognized reader takes priority over the VID and name");
@@ -160,6 +201,32 @@ static class TrayGroupsTests {
             var loaded=DeviceSettings.LoadBindings(path);
             Check(loaded.TrayBrandColor=="razer"&&loaded.TrayGroups[0].BrandColor=="off","brand choices persist independently");
             Check(TrayBrand.Resolve("off","razer",0x1532,"Razer Mouse","mouse")==0,"off takes priority over a recognized brand");
+        }
+    }
+    static void BrandColorList(){
+        foreach(string font in new[]{"normal","large"})using(var fixture=new Fixture()){
+            var pref=DeviceSettings.Current;pref.FontSize=font;DeviceSettings.UseTransientConfiguration(pref);
+            var nav=fixture.Nav;fixture.Page(PopupPage.TrayBrandColors);nav.VisibleChoices=2;nav.MaximumHeight=1200;nav.Offset=200;
+            var rows=PopupPages.Build(fixture.Owner,nav,false);
+            Check(rows.Count==TrayBrand.Keys.Length+2&&rows.TrueForAll(row=>row.Id!=7&&row.Id!=8),"full brand list never gains page buttons");
+            Check(nav.Offset==0&&rows.TrueForAll(row=>!row.Viewport.HasValue)&&rows[1].TargetToken==TrayBrand.Automatic&&rows[2].TargetToken==TrayBrand.Off,"tall display shows all options in the original order");
+
+            typeof(Details).GetField("updatedAnchor",Private).SetValue(fixture.Popup,new TrayPanelAnchor(Point.Empty,new Rectangle(0,0,800,310),TaskbarEdge.Bottom));
+            typeof(Details).GetField("dpiScale",Private).SetValue(fixture.Popup,1f);
+            rows=fixture.Rows();var selected=rows[1];var last=rows[rows.Count-1];
+            Check(PopupPages.SizeFor(rows).Height==nav.MaximumHeight&&selected.Rect==selected.VisibleRect&&last.VisibleRect.IsEmpty,"short monitor keeps list within its available height");
+            var labels=new List<string>();CompactRenderer.LabelObserver=label=>labels.Add(label.Text);
+            try{using(var image=new Bitmap(VisualDesign.PanelWidth,nav.MaximumHeight))using(var graphics=Graphics.FromImage(image))PopupPages.Paint(graphics,fixture.Owner,nav,rows,false,-1,-1,-1);}
+            finally{CompactRenderer.LabelObserver=null;}
+            Check(labels.Contains(selected.Text)&&!labels.Contains(last.Text),"offscreen choices are not painted");
+            var wheel=typeof(Control).GetMethod("OnMouseWheel",Private);
+            wheel.Invoke(fixture.Popup,new object[]{new MouseEventArgs(MouseButtons.None,0,100,100,-120)});
+            Check(nav.Offset==(font=="large"?40:36)&&fixture.Rows()[1].VisibleRect.IsEmpty,"mouse wheel scrolls the same list by one row");
+            Call(fixture.Popup,"FocusControl",last);rows=fixture.Rows();last=rows[rows.Count-1];
+            Check(last.VisibleRect==last.Rect&&PopupPages.Hit(rows,new PointF(30,last.Rect.Y+2)).TargetToken==last.TargetToken,"keyboard and accessibility focus reveal the last choice for activation");
+            Check(rows[0].Id==6&&!rows[0].Viewport.HasValue&&rows.Count==TrayBrand.Keys.Length+2&&PopupPages.Hit(rows,new PointF(50,10))==null,"back stays fixed and clipped choices cannot intercept the header");
+            wheel.Invoke(fixture.Popup,new object[]{new MouseEventArgs(MouseButtons.None,0,100,100,2400)});
+            Check(nav.Offset==0&&fixture.Rows()[1].VisibleRect==fixture.Rows()[1].Rect,"scrolling back clamps exactly to the first choice");
         }
     }
     static void AutomaticGroups(){
@@ -296,7 +363,8 @@ static class TrayGroupsTests {
             var extra=(NativeTrayIcon)icons.For(group.Id);var extraNotify=(NotifyIcon)Field(extra,"tray");Check(Field(f.Owner,"tray")==first&&icons.First==original,"the original NotifyIcon is preserved when groups are added");
             Check(extraNotify.Text=="耳机组：headset 65%"&&first.Text.StartsWith("托盘图标 1：")&&!first.Text.Contains("headset"),"group presentation includes hidden members and excludes them from the first group");
             Check(extraNotify.ContextMenuStrip==first.ContextMenuStrip&&!extraNotify.Visible&&!first.Visible,"all icons share the existing menu and test icons stay hidden");
-            f.Owner.WirelessDevices=new WirelessDevice[0];f.Owner.ConfigurationChanged(false);Check(extraNotify.Text=="耳机组：没有已连接的设备"&&icons.For(group.Id)==extra,"an empty group keeps its icon and connection message");
+            f.Owner.WirelessDevices=new WirelessDevice[0];f.Owner.ConfigurationChanged(false);Check(extraNotify.Text=="耳机组：没有已连接的设备"&&icons.For(group.Id)==extra&&(bool)Field(extra,"hidden"),"disconnect hides the existing icon instance without deleting its group");
+            f.Owner.WirelessDevices=new[]{Device("headset","headset")};f.Owner.ConfigurationChanged(false);Check(icons.For(group.Id)==extra&&!(bool)Field(extra,"hidden"),"reconnect restores the same icon instance");
             var status=f.Owner.BuildStatusJson();Check(!status.Contains("耳机组")&&!status.Contains("TrayGroups"),"extra groups do not leak into the MyDockFinder state schema");
             var click=new Point(Screen.PrimaryScreen.Bounds.Left+200,Screen.PrimaryScreen.Bounds.Top+12);f.Owner.CursorPosition=delegate{return click;};
             f.Popup.Dispose();NotifyClick(extraNotify,1);var panel=(Details)Field(f.Owner,"details");Check(panel!=null&&!panel.IsDisposed,"an additional icon opens the shared panel");
@@ -421,11 +489,15 @@ static class TrayGroupsTests {
         output=args.Length>0?args[0]:Path.GetDirectoryName(Application.ExecutablePath);
         var previous=DeviceSettings.Current;
         try {
+            if(Array.IndexOf(args,"--disconnect")>=0){Run("hide disconnected devices",HideDisconnected);Console.WriteLine(checks+" checks, "+failures+" failures");return failures==0?0:1;}
+            if(Array.IndexOf(args,"--brand-colors")>=0){Run("per-group brand choices and persistence",BrandColors);Run("single scrollable brand color list",BrandColorList);Console.WriteLine(checks+" checks, "+failures+" failures");return failures==0?0:1;}
             Run("configuration contract",Contracts);Run("selection contract",SelectionContract);Run("lifecycle contract",LifecycleContract);Run("device style contract",DeviceStyleContract);Run("preferences entry",PreferencesEntry);
             Run("tolerant configuration and downgrade compatibility",Configuration);Run("exclusive group editing",GroupEditing);Run("pure selection rules",Selection);Run("configured groups control taskbar slots",TaskbarReadings);Run("group tooltip formatting",Tooltips);Run("incremental icon lifecycle and Explorer recovery",Lifecycle);Run("settings navigation and actions",SettingsUi);Run("tray integration",Integration);Run("hidden candidates without extra groups",delegate{HiddenCandidates(false);});Run("hidden candidates with extra groups",delegate{HiddenCandidates(true);});Run("extra-group activity and rename dialog",ActiveGroupAndRename);Run("settings bounds, identity and previews",SettingsRendering);Run("native-size device glyphs and bars",DeviceRendering);
             foreach(int size in new[]{16,20,24,32}){int pixels=size;Run("battery bars at "+pixels+"px",delegate{BatteryBars(pixels);});}
             Run("automatic discovery, manual edits and deletion persistence",AutomaticGroups);
             Run("per-group brand choices and persistence",BrandColors);
+            Run("single scrollable brand color list",BrandColorList);
+            Run("hide disconnected devices",HideDisconnected);
             Console.WriteLine(checks+" checks, "+failures+" failures");return failures==0?0:1;
         }finally{VisualDesign.HighContrastOverride=null;DeviceSettings.UseTransientConfiguration(previous);}
     }

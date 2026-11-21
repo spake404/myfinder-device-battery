@@ -105,11 +105,20 @@ static class UiMenusTests {
     }
     static void PreferenceOrder(){
         using(var f=new Fixture()){
-            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","preferences include theme style, layout, font size and the requested noninteractive groups");
+            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|合成语音提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","voice reminder appears directly under the low-battery notification toggle");
             f.Page(PopupPage.Preferences);var toggle=f.Find("自动检查反馈回复");Check(toggle.Id==226&&toggle.Checked,"feedback checking defaults on in the settings page");f.Activate(toggle);
             Check(!DeviceSettings.Current.CheckFeedbackReplies&&f.Saves==1,"feedback checking toggle uses the existing configuration writer");
             var beta=f.Find("提醒测试版更新");Check(beta.Id==227&&beta.Checked,"beta update reminders default on in the settings page");f.Activate(beta);
             Check(!DeviceSettings.Current.IncludeBetaUpdates&&f.Saves==2,"beta reminder toggle uses the existing configuration writer");
+            f.Page(PopupPage.Preferences);
+            Check(!f.Find("合成语音提醒").Enabled,"voice cannot be selected before low battery reminders are enabled");
+            f.Activate(f.Find("低电量提醒"));
+            var voice=f.Find("合成语音提醒");Check(voice.Enabled&&!voice.Checked,"enabling notifications enables the separate voice option");
+            f.Activate(voice);
+            Check(DeviceSettings.Current.LowBatteryVoice&&f.Find("合成语音提醒").Checked,"turning voice on saves and updates the switch");
+            f.Activate(f.Find("低电量提醒"));
+            voice=f.Find("合成语音提醒");
+            Check(!voice.Enabled&&!voice.Checked&&DeviceSettings.Current.LowBatteryVoice,"the master switch silences voice without forgetting the preference");
         }
     }
     static bool IsInteger(float value){return Math.Abs(value-(float)Math.Round(value))<.001f;}
@@ -153,7 +162,8 @@ static class UiMenusTests {
                         float bottom=0;
                         foreach(var item in pageRows){
                             if(item.Id==6)continue;
-                            Check(item.Rect.Top>=bottom&&item.Rect.Left>=0&&item.Rect.Right<=sz.Width&&item.Rect.Bottom<=sz.Height-(VisualDesign.LargeFont?32:28),"row "+item.Text+" on "+page+" does not overlap or overflow in "+fontMode);
+                            float maxBottom=item.Viewport.HasValue?item.Viewport.Value.Bottom:item.Rect.Bottom;
+                            Check(item.Rect.Top>=bottom&&item.Rect.Left>=0&&item.Rect.Right<=sz.Width&&maxBottom<=sz.Height-(VisualDesign.LargeFont?32:28),"row "+item.Text+" on "+page+" does not overlap or overflow in "+fontMode);
                             bottom=item.Rect.Bottom;
                         }
                         using(var bmp=new Bitmap(sz.Width,sz.Height))using(var g=Graphics.FromImage(bmp))PopupPages.Paint(g,f.Owner,nav,pageRows,false,-1,-1,-1);
@@ -325,10 +335,10 @@ static class UiMenusTests {
             var partial=rows.Find(delegate(PopupControl row){return row.Viewport.HasValue&&row.Enabled&&!row.Information&&!row.VisibleRect.IsEmpty&&row.VisibleRect!=row.Rect;});Check(partial!=null,"the actual popup contains an enabled partially clipped stage");
             var partialPoint=new MouseEventArgs(MouseButtons.Left,1,(int)((partial.VisibleRect.X+partial.VisibleRect.Width/2)*1.5f),(int)((partial.VisibleRect.Y+partial.VisibleRect.Height/2)*1.5f),0);
             typeof(Control).GetMethod("OnMouseMove",Private).Invoke(f.Popup,new object[]{partialPoint});typeof(Control).GetMethod("OnMouseDown",Private).Invoke(f.Popup,new object[]{partialPoint});
-            Check((int)Field(f.Popup,"hoverAction")==partial.Id&&((PopupControl)Field(f.Popup,"pressedControl")).StableKey==partial.StableKey,"hover and press use the visible part of a partially clipped control");Call(f.Popup,"ClearGridPointer");
+            Check((int)Field(f.Popup,"hoverAction")==partial.Id&&((PopupControl)Field(f.Popup,"pressedControl")).StableKey==partial.StableKey,"hover and press use the visible part of a partially clipped control");Call(f.Popup,"ClearScrollPointer");
             var croppedPoint=new MouseEventArgs(MouseButtons.Left,1,partialPoint.X,(int)((partial.Rect.Top+.25f)*1.5f),0);
             typeof(Control).GetMethod("OnMouseMove",Private).Invoke(f.Popup,new object[]{croppedPoint});typeof(Control).GetMethod("OnMouseDown",Private).Invoke(f.Popup,new object[]{croppedPoint});
-            var cropped=(PopupControl)Field(f.Popup,"pressedControl");Check((int)Field(f.Popup,"hoverAction")!=partial.Id&&(cropped==null||cropped.StableKey!=partial.StableKey),"the cropped part cannot hover or capture that control");Call(f.Popup,"ClearGridPointer");
+            var cropped=(PopupControl)Field(f.Popup,"pressedControl");Check((int)Field(f.Popup,"hoverAction")!=partial.Id&&(cropped==null||cropped.StableKey!=partial.StableKey),"the cropped part cannot hover or capture that control");Call(f.Popup,"ClearScrollPointer");
             for(int i=0;i<rows.Count;i++){
                 var row=rows[i];var child=tree.GetChild(i);var visible=row.VisibleRect;
                 if(visible.IsEmpty){Check(child.Bounds.IsEmpty&&(child.State&AccessibleStates.Offscreen)!=0,"fully clipped controls expose no accessible screen bounds");continue;}
@@ -400,7 +410,7 @@ static class UiMenusTests {
             Check(!rows.Exists(delegate(PopupControl row){return row.Text=="当前状态";}),"more-options help omits an empty-state reason when devices are visible");
             Check(Texts(rows)=="请确认接收器已插好，设备已开机并唤醒|重新识别设备|查看支持清单|复制诊断摘要|反馈问题|我的反馈|反馈不代表一定能适配","help rows use the exact copy and order");
             var feedback=rows.Find(delegate(PopupControl row){return row.Text=="反馈问题";});
-            Check(feedback.Id==258&&feedback.Detail=="在程序内提交，不需要 GitHub 账号","help shares feedback action 258 and the configured-relay description");
+            Check(feedback.Id==258&&feedback.Detail=="提交需要 GitHub 账号","help shares feedback action 258 and the direct GitHub issues description");
             Check(rows[1].Information&&rows[7].Information,"help explanations are static text");
             Check(rows[6].Id==262&&!rows[6].Information&&Rows(f.Owner,PopupPage.Diagnostics).Exists(delegate(PopupControl row){return row.Id==262&&row.Text=="我的反馈";}),"both feedback pages expose the same history action");
             int reads=f.Reads;f.Activate(f.Find("重新识别设备"));Pump(delegate{return !f.Owner.IsRefreshing;});

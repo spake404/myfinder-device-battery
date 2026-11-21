@@ -14,7 +14,7 @@ namespace AtkBattery {
     // An explicit public-data projection, independent of local diagnostics.
     // Construction is offline. Only the click handler copies/opens anything.
     internal sealed class FeedbackReport {
-        const string IssueBase="https://github.com/wushuai0802/myfinder-device-battery/issues/new?template=device-request.yml";
+        const string IssueBase=UpdateTrust.Repository+"/issues/new?template=device-request.yml";
         const string Title="[设备反馈] 电量与连接";
         const int UrlLimit=6000;
         readonly List<string> devices=new List<string>(),suppressed=new List<string>(),unadapted=new List<string>(),health=new List<string>();

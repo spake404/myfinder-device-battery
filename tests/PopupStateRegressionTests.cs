@@ -267,7 +267,7 @@ static class PopupStateRegressionTests {
         using(var fixture=new Fixture()) {
             var owner=fixture.Owner;owner.NativeMousePresent=false;owner.GenericReady=true;
             var a=Device("device-a","Fixture A",50);var b=Device("device-b","Fixture B",50);owner.WirelessDevices=new[]{b,a};
-            var pref=DeviceSettings.Current;pref.TraySource="lowest";DeviceSettings.UseTransientConfiguration(pref);
+            var pref=DeviceSettings.Current;pref.TraySource="lowest";pref.TrayHideWhenDisconnected=false;DeviceSettings.UseTransientConfiguration(pref);
             Check(Present(owner,"lowest").Battery.Name==b.Name,"lowest initially selects the first equal reading");
             owner.WirelessDevices=new[]{a,b};Check(Present(owner,"lowest").Battery.Name==b.Name,"lowest keeps an equal previous choice stable after reorder");
             pref.TrayDeviceId=a.Id;DeviceSettings.UseTransientConfiguration(pref);
