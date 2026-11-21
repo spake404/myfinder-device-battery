@@ -16,6 +16,7 @@ namespace AtkBatteryTray {
             menu.ShowCheckMargin=false;
             menu.Opening+=delegate {ApplyLayout(menu);};
             menu.SizeChanged+=delegate {ApplyRegion(menu);};
+            menu.Disposed+=delegate {var previous=menu.Region;menu.Region=null;if(previous!=null)previous.Dispose();};
             ApplyLayout(menu);
         }
 

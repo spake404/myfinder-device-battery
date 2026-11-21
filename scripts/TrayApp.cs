@@ -1721,7 +1721,7 @@ namespace AtkBatteryTray {
             disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;
             if(genericWorker!=null)genericWorker.Dispose();
             if(persistStatus)AudioBrokerClient.Shutdown();fileWriter.Dispose();
-            if(details!=null)details.Close();var menu=tray.ContextMenuStrip;balloonExpiry.Dispose();if(taskbarStrip!=null)taskbarStrip.Dispose();trayIcons.Dispose();if(menu!=null)menu.Dispose();dispatch.Dispose();base.ExitThreadCore();
+            if(details!=null){details.Close();details.Dispose();}var menu=tray.ContextMenuStrip;balloonExpiry.Dispose();if(taskbarStrip!=null)taskbarStrip.Dispose();trayIcons.Dispose();if(menu!=null)menu.Dispose();dispatch.Dispose();base.ExitThreadCore();
         }
     }
     static class Program {

@@ -553,6 +553,6 @@ static class TrayInteractionTests {
             if(activationChecksUnavailable>0)Console.WriteLine("Boundary: "+activationChecksUnavailable+" actual activation assertion unavailable because the owned control form could not activate in this desktop session.");
             return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
-        finally {cached.SetValue(null,previous);}
+        finally {cached.SetValue(null,previous);GC.Collect();GC.WaitForPendingFinalizers();GC.Collect();}
     }
 }
