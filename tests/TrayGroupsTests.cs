@@ -161,6 +161,11 @@ static class TrayGroupsTests {
             Check(!views()[1].Hidden&&views()[1].DeviceKind=="keyboard","automatic group can switch to a remaining connected member");
             keyboard.Device.Online=false;
             Check(views()[1].Hidden,"automatic group hides once all its configured members are offline");
+            preferences=DeviceSettings.Current;preferences.TrayDeviceId=null;preferences.TraySource="mouse";DeviceSettings.UseTransientConfiguration(preferences);
+            Check(views()[0].Hidden,"the unpinned primary icon hides when its only device is offline");
+            mouse.Device.Online=true;mouse.Battery.Percent=null;mouse.Battery.Fresh=false;
+            Check(!views()[0].Hidden&&views()[0].DeviceKind=="mouse"&&views()[0].Battery.Percent==null,"the primary icon returns when its mouse reconnects before a battery reading");
+            mouse.Device.Online=false;
             fixture.Nav.TrayGroupKey=TrayConfiguration.FirstId;fixture.Click(fixture.Find("tray:hide-disconnected",TrayConfiguration.FirstId));
             Check(!views()[0].Hidden&&views()[1].Hidden,"the primary icon can independently keep its disconnected placeholder");
         }

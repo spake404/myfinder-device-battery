@@ -1208,7 +1208,7 @@ namespace AtkBatteryTray {
             var selected=TraySelection.Select(available,source,pref.TrayDeviceId,activePhysicalId,activeNative,trayDeviceKey,requireConnected:pref.TrayHideWhenDisconnected);
             trayDeviceKey=selected==null?null:selected.Id;
             var view=TraySelection.Present(available,selected,pref.TrayGroups.Count>0?TrayConfiguration.FirstName:null,pref.TrayBrandColor);
-            view.Hidden=pref.TrayHideWhenDisconnected&&selected==null&&!String.IsNullOrEmpty(pref.TrayDeviceId);
+            view.Hidden=pref.TrayHideWhenDisconnected&&selected==null;
             return view;
         }
         List<WirelessCard> TrayCandidates(bool includeHidden){return WirelessLayout.Build(this,0,100000,includeHidden).All.FindAll(delegate(WirelessCard card){return card.Id!="empty"&&!card.AudioOnly&&card.Battery!=null&&(card.Device!=null||card.NativeMouse||card.NativeHeadset);});}
