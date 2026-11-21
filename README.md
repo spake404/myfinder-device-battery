@@ -5,6 +5,8 @@
 合并版的程序更新与反馈均指向本仓库（[Releases](https://github.com/spake404/myfinder-device-battery/releases) 与 [Issues](https://github.com/spake404/myfinder-device-battery/issues)），更新只认本仓库独立签名；型号数据包仍沿用上游渠道，与程序更新分开。合并版源码以本仓库 `main` 为准。
 
 <img src="docs/images/app-icon.png" alt="MyFinder Device Battery 冰川蓝双卡图标" width="96" height="96">
+<img width="311" height="358" alt="image" src="https://github.com/user-attachments/assets/e534b7a5-d5a8-4c5d-a55a-e205d7c09189" />
+
 
 Windows 上的多品牌无线鼠标、耳机与键盘电量卡片，支持 MyDockFinder / MyFinder，也可独立作为系统托盘应用使用。
 
