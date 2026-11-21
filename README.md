@@ -246,8 +246,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Uninstall-Star
 - 外观默认跟随系统，支持浅色/深色与减弱动效。偏好选项提供统一的选择页并自动保存；详情中的设备别名只影响本程序，不改系统或USB名称。
 - 同一设备的有线/接收器旧连接满足严格条件时暂时隐藏；两张都是当前读数、同一接收器不同槽位均保留。诊断摘要可查看“已隐藏的重复连接”，恢复读数后重新显示。两只同名鼠标电量接近且其中一只休眠时也可能暂时隐藏，详见[兼容边界](docs/compatibility.md)。
 - “状态与诊断”显示自启与读取状态，可主动复制本机诊断摘要。“状态与诊断”和“设备没显示？”中的“反馈问题”打开反馈窗口，可选择类型、填写描述、选择是否附带诊断，并查看完整诊断。反馈使用独立报告，仅包含程序/Windows 版本、卡片设备原始名称、类型、读取器、电量与当前读数标志、明确匹配的 VID:PID、隐藏连接、未取得电量设备及异常读取器状态；不含别名、音频端点、进程/实例身份、路径、序列号或 physicalId。隐藏连接和未取得电量设备列表不写入 `status.json`。请不要在描述中填写个人信息。
-- 合并版反馈不使用上游中转服务：在反馈窗口点击“在浏览器中提交”，程序会复制类型、描述和所选诊断，并用默认浏览器打开本仓库预填的 GitHub Issues 表单（需要 GitHub 账号）。提交前可检查内容，预填失败时可粘贴剪贴板报告；URL 上限 6000 字符，超长先去掉健康项，再从末尾去掉未取得电量设备，仍超长才裁减隐藏连接和卡片列表，必要时截断链接中的描述，并注明“已截断；完整内容已复制”。剪贴板保留完整描述和所选诊断。
-- “我的反馈”提供“在网页查看”入口，可直接打开本仓库的 GitHub Issues 页面查看反馈与回复；若本机保留有旧版加密记录（`%LocalAppData%\MyFinderDeviceBattery\feedback-v1.dat`），仍可在列表内查看或删除本地记录。
+- 反馈可在程序内直接提交到本仓库，不需要 GitHub 账号（通过本仓库专属 Cloudflare Worker 中转 `myfinder-feedback-relay.spake404.workers.dev` 创建本仓库 Issue）。中转服务不可用时，可点击“改用浏览器提交”，复制类型、描述和所选诊断，并用默认浏览器打开本仓库预填的 GitHub Issues 表单（需要 GitHub 账号）。提交前可检查内容，预填失败时可粘贴剪贴板报告；URL 上限 6000 字符，超长先去掉健康项，再从末尾去掉未取得电量设备，仍超长才裁减隐藏连接和卡片列表，必要时截断链接中的描述，并注明“已截断；完整内容已复制”。剪贴板保留完整描述和所选诊断。
+- “我的反馈”可查看本机提交的反馈和维护者（`spake404`）回复，并追加公开的补充资料。最多保留 50 条本地记录，记录与补充凭证使用当前 Windows 用户的 DPAPI 加密保存在 `%LocalAppData%\MyFinderDeviceBattery\feedback-v1.dat`；删除本地记录不会删除 GitHub issue，但会丢失本机的补充凭证。补充超时后请重试原内容，程序会复用原请求编号确认结果。
+- 默认约每 6 小时自动检查回复，长期无新动态时降低频率或停止；仅维护者的新回复会合并提醒，最多每 6 小时一次。“显示与提醒”中的“自动检查反馈回复”可关闭后台请求，关闭后仍可在“我的反馈”手动刷新。
 - 接收器插拔、系统恢复会合并触发一次检查，仍保留原有定时兜底。耳机开机未必产生 Windows 设备事件。
 
 托盘右键的“音源设置”还提供快速绑定、刷新设备列表和恢复默认音源识别。
@@ -280,7 +281,7 @@ ATK界面请求固定到用户点击时的接收器、目标DPI值和连接代�
 
 程序以 HTTPS / TLS 1.2 请求 `spake404/myfinder-device-battery` 的 GitHub Releases API，只附加普通的 `User-Agent: MyFinderDeviceBattery/<版本>`，不上传设备信息、诊断、设置、账号或设备/实例标识符。GitHub 仍会像普通网络请求一样看到来源 IP。是否接收 `-beta.N` 由“提醒测试版更新”控制；程序忽略草稿、版本号无效及缺少更新附件的发布，只接受高于当前版本的更新。
 
-反馈功能不使用上游中转服务，也不向外部中转发送诊断或凭证。点击「在浏览器中提交」时，程序会把完整内容复制到剪贴板并打开本仓库的 GitHub Issues 新建页面 `https://github.com/spake404/myfinder-device-battery/issues/new?template=device-request.yml`；点击「我的反馈」中的「在网页查看」会打开 `https://github.com/spake404/myfinder-device-battery/issues`。程序不内置 GitHub token，更新检查也不会上传反馈内容。
+反馈功能接入本仓库独立的 Cloudflare Worker 中转服务（`https://myfinder-feedback-relay.spake404.workers.dev`），不再请求上游中转；所有程序内提交的反馈、补充资料和回复检查均指向 `spake404/myfinder-device-battery` 的 GitHub Issues。中转不可用时仍可改用浏览器打开 `https://github.com/spake404/myfinder-device-battery/issues/new?template=device-request.yml` 提交。程序不内置 GitHub token，更新检查也不会上传反馈内容。
 
 发现新版本后，托盘最多提醒一次，“更多选项”和“状态与诊断”显示“有新版本”。可在版本对话框中“跳过此版本”，之后不再提示它；更高版本恢复提示。发布说明按有长度上限的纯文本显示，不执行脚本、不解析或自动打开说明中的链接。
 

@@ -38,16 +38,18 @@ static class FeedbackFormTests {
     }
     static void Show(FeedbackForm form){form.Opacity=0;form.Show();Application.DoEvents();Find<TextBox>(form,"Description").Text="设备连接后没有显示电量";}
     static void RelayConfiguration(){
-        Check(FeedbackRelay.Url=="","shipped build disables the upstream relay and submits directly to repository issues");
+        var uri=new Uri(FeedbackRelay.Url,UriKind.Absolute);
+        Check(uri.Scheme==Uri.UriSchemeHttps,"shipped relay uses HTTPS");
+        Check(uri.Host=="myfinder-feedback-relay.spake404.workers.dev","shipped relay uses the deployed host");
+        Check(FeedbackRelay.Url=="https://myfinder-feedback-relay.spake404.workers.dev","shipped relay is the exact base URL without a trailing slash");
+        Check(FeedbackRelay.Endpoint(FeedbackRelay.Url).AbsoluteUri==FeedbackRelay.Url+"/feedback","shipped relay builds the feedback endpoint");
         Check(FeedbackClient.IssuesUrl=="https://github.com/spake404/myfinder-device-battery/issues","issues URL targets our repository");
         Check(FeedbackClient.IssueUrl(42)==Issue,"issue URL targets our repository");
-        var http=new FakeHttp();string copied=null,opened=null;
-        using(var form=Form(http,null,delegate(string value){copied=value;},delegate(string value){opened=value;})){
+        var http=new FakeHttp();using(var form=Form(http,null)){
             Show(form);var submit=Find<Button>(form,"SubmitFeedback");
-            Check(submit.Text=="在浏览器中提交"&&Find<Label>(form,"FeedbackNotice").Text=="将打开 GitHub 提交，需要 GitHub 账号","default form submits directly via browser to GitHub issues");
-            submit.PerformClick();
-            Check(http.Calls==0&&copied!=null&&opened!=null&&opened.StartsWith("https://github.com/spake404/myfinder-device-battery/issues/new?template=device-request.yml&title=",StringComparison.Ordinal),"default form opens our repository issue template without touching any relay");
-            form.Close();
+            Check(submit.Text=="提交"&&Find<Label>(form,"FeedbackNotice").Text.Contains("公开显示在 GitHub"),"default form offers in-app submission with the public issue notice");
+            submit.PerformClick();Pump(delegate{return Find<Label>(form,"FeedbackStatus").Text==Submitted;});
+            Check(http.Calls==1&&http.Uri.AbsoluteUri==FeedbackRelay.Url+"/feedback","default form sends once to the shipped endpoint through fake HTTP");form.Close();
         }
     }
     static void Validation(){

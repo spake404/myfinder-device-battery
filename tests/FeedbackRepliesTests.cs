@@ -299,7 +299,9 @@ static class FeedbackRepliesTests {
             dialog.Reload(43);Check(!Find<Button>(dialog,"SupplementFeedback").Enabled&&comments.Text.Contains("此反馈只能在网页查看"),"keyless row is web-only");
             Find<Button>(dialog,"DeleteFeedbackRecord").PerformClick();Check(confirmed&&store.Find(43)==null&&http.Bodies.Count==0,"local deletion explicitly confirms and never touches the relay");dialog.Close();
         }
-        var noRelayHttp=new Http();var noRelayService=new FeedbackReplies(Store(),noRelayHttp);string issuesOpened=null;
+        var defaultService=new FeedbackReplies(Store(),new Http());
+        Check(defaultService.HasRelay,"default service uses our repository feedback relay");
+        var noRelayHttp=new Http();var noRelayService=new FeedbackReplies(Store(),noRelayHttp,"");string issuesOpened=null;
         Check(!noRelayService.HasRelay&&noRelayService.Poll(true,null,CancellationToken.None).Balloon==null&&noRelayService.Poll(false,null,CancellationToken.None).Message.Contains("GitHub Issues")&&noRelayService.Supplement(42,"valid supplement",null,CancellationToken.None).Kind==SupplementKind.Unavailable&&noRelayHttp.Bodies.Count==0,"default no-relay service never posts to upstream relay");
         using(var dialog=new MyFeedbackDialog(noRelayService,Report(),false,delegate(string url){issuesOpened=url;})){
             dialog.Opacity=0;dialog.Show();Application.DoEvents();
