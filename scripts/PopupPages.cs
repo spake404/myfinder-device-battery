@@ -5,7 +5,7 @@ using System.Drawing.Drawing2D;
 using AtkBattery;
 
 namespace AtkBatteryTray {
-    internal enum PopupPage { Main, More, Audio, Preferences, Mouse, Headset, Diagnostics, Bindings, PickBinding, ChoosePreference, Devices, Device, ManageDevice, DeviceMissing, TrayIcons, TrayGroup, TrayRules, TrayMembers, ConfirmTrayDelete, TrayBrandColors }
+    internal enum PopupPage { Main, More, Audio, Preferences, Mouse, Headset, Diagnostics, Bindings, PickBinding, ChoosePreference, Devices, Device, ManageDevice, DeviceMissing, TrayIcons, TrayGroup, TrayRules, TrayMembers, ConfirmTrayDelete, TrayBrandColors, Folia, FoliaQueue, FoliaPlaylists }
     internal sealed class PopupControl {
         public int Id;
         public int DpiValue;
@@ -13,7 +13,7 @@ namespace AtkBatteryTray {
         public RectangleF Rect;
         public RectangleF? Viewport;
         public RectangleF VisibleRect {get{if(!Viewport.HasValue)return Rect;var visible=RectangleF.Intersect(Rect,Viewport.Value);return visible.Width>0&&visible.Height>0?visible:RectangleF.Empty;}}
-        public string Text,Value,Detail,Icon,EndpointId,DeviceKey,ActionKey,TargetToken,PaletteKey,LayoutKey,AccessibleName;
+        public string Text,Value,Detail,Icon,ImageUrl,EndpointId,DeviceKey,ActionKey,TargetToken,PaletteKey,LayoutKey,AccessibleName;
         public string GroupKey;
         public int BrandSwatch;
         public bool Enabled=true,Selected,Toggle,Checked,Information,Slider,Busy,WrapText,Section;
@@ -36,6 +36,10 @@ namespace AtkBatteryTray {
         internal string AudioDeviceKey,AudioDeviceName;
         internal string TrayGroupKey=TrayConfiguration.FirstId;
         internal bool TrayHint;
+        internal bool FoliaVolumeOpen;
+        internal bool FoliaPlaylistsOpen;
+        internal double FoliaSeekPreview=-1,FoliaVolumePreview=-1;
+        internal int FoliaAnimActionId,FoliaAnimTick;
         readonly Stack<ReturnPoint> history=new Stack<ReturnPoint>();
         sealed class ReturnPoint {internal PopupPage Page;internal int Focus,Offset;internal string FocusKey,AudioDeviceKey,AudioDeviceName;}
         internal void Reset(){history.Clear();Page=PopupPage.Main;Offset=0;VolumePreview=-1;Notice="";DeviceScroll=0;ReturnedFocusKey=null;AudioDeviceKey=null;AudioDeviceName=null;TrayGroupKey=TrayConfiguration.FirstId;TrayHint=false;}
@@ -108,6 +112,7 @@ namespace AtkBatteryTray {
                 return WithIdentity(rows,nav,owner);
             }
             if(nav.Page==PopupPage.More) {
+                if(owner.FoliaRunning)rows.Add(Row(800,"Folia 播放控制",owner.FoliaConnected?"已连接":"待启用","speaker"));
                 if(owner.UpdateAvailable)rows.Add(Row(260,owner.UpdateStatus,null,"update"));
                 rows.Add(Row(200,"音源与麦克风",null,"speaker"));rows.Add(Row(201,"显示与提醒",null,"settings"));
                 rows.Add(Row(206,"设备管理",null,"keyboard"));rows.Add(Row(207,"设备没显示？",null,"info"));
@@ -187,6 +192,7 @@ namespace AtkBatteryTray {
                 else if(nav.PreferenceAction==228){labels=new[]{"标准","较大"};first=460;selected=pref.FontSize=="large"?1:0;}
                 else if(nav.PreferenceAction==229){labels=PanelLayouts.Names;first=470;selected=Array.IndexOf(PanelLayouts.Keys,PanelLayouts.Normalize(pref.PanelLayout));}
                 else if(nav.PreferenceAction==224){labels=new[]{TrayConfiguration.IconPresetName};first=450;selected=0;}
+                else if(nav.PreferenceAction==811){labels=FoliaModes.Names;first=812;selected=FoliaModes.Normalize(pref.FoliaTaskbarMode)=="compact"?0:1;}
                 else if(nav.PreferenceAction==211){labels=new[]{"当前使用的设备","最低电量","自动选择有数据的设备","鼠标优先","耳机优先","键盘优先"};first=410;selected=pref.TraySource=="active"?0:pref.TraySource=="lowest"?1:pref.TraySource=="auto"?2:pref.TraySource=="mouse"?3:pref.TraySource=="headset"?4:5;}
                 else if(nav.PreferenceAction==213){labels=new[]{"10%","15%","20%"};first=420;selected=pref.WarningThreshold==10?0:pref.WarningThreshold==15?1:2;}
                 else {labels=new[]{"1分钟","2分钟","5分钟"};first=430;selected=pref.BackgroundSeconds==60?0:pref.BackgroundSeconds==120?1:2;}
@@ -295,8 +301,45 @@ namespace AtkBatteryTray {
                 var sync=Row(251,WirelessLayout.RefreshText(device),null,"refresh");sync.Enabled=device!=null;rows.Add(sync);
                 if(device!=null&&device.Kind=="headset")rows.Add(Row(200,"音源与麦克风",null,"speaker"));
                 rows.Add(Row(257,"显示与排序",null,"settings"));
+            }else if(nav.Page==PopupPage.Folia) {
+                var fs=owner.FoliaState;
+                if(owner.FoliaConnected&&fs!=null) {
+                    return WithIdentity(FoliaPillLayout.BuildControls(owner,nav,pref),nav,owner);
+                }
+                if(!owner.FoliaConnected||fs==null) {
+                    rows.Add(Info("Folia 状态",owner.FoliaRunning?"等待桥接连接":"Folia 未运行"));
+                    if(FoliaBridgeInstaller.IsFoliaInstalled()){
+                        var bridge=Info("桥接模组",FoliaBridgeInstaller.IsBridgeEnabledInFolia()?"已启用，等待播放器就绪":"已部署到 Folia，请在 Folia「模组」页启用 MyFinder 桥接");
+                        bridge.WrapText=true;rows.Add(bridge);
+                        rows.Add(Row(829,"重新部署 Folia 桥接模组",null,"refresh"));
+                    }
+                    rows.Add(Toggle(810,"任务栏显示 Folia 控制",pref.FoliaEnabled));
+                    rows.Add(Row(811,"Folia 任务栏样式",FoliaModes.Name(pref.FoliaTaskbarMode)));
+                } else {
+                    rows.Add(Info(String.IsNullOrEmpty(fs.Title)?"等待播放":fs.Title,String.IsNullOrEmpty(fs.Artist)?"Folia":fs.Artist));
+                    rows.Add(Row(820,fs.IsPlaying?"暂停":"播放",FoliaClient.FormatTime(fs.Position)+" / "+FoliaClient.FormatTime(fs.Duration)));
+                    rows.Add(Row(821,"上一首"));
+                    rows.Add(Row(822,"下一首"));
+                    var likeRow=Toggle(823,"喜欢此歌曲",fs.Liked);likeRow.Enabled=fs.CanLike;rows.Add(likeRow);
+                    rows.Add(Row(824,"循环模式",fs.LoopLabel));
+                    rows.Add(Row(825,"随机打乱队列"));
+                    rows.Add(Toggle(828,"Folia 静音",fs.Muted));
+                    if(!String.IsNullOrEmpty(fs.CurrentLyric)){
+                        var lyric=Info("实时歌词",fs.CurrentLyric+(String.IsNullOrEmpty(fs.NextLyric)?"":"\n"+fs.NextLyric));
+                        lyric.WrapText=true;rows.Add(lyric);
+                    }
+                    rows.Add(Row(830,"播放队列",owner.FoliaQueueCount>0?owner.FoliaQueueCount+" 首":"点击查看"));
+                    rows.Add(Row(831,"打开播放器主界面"));
+                    rows.Add(Row(833,"收藏到歌单"));
+                    rows.Add(Toggle(810,"任务栏显示 Folia 控制",pref.FoliaEnabled));
+                    rows.Add(Row(811,"Folia 任务栏样式",FoliaModes.Name(pref.FoliaTaskbarMode)));
+                }
+            }else if(nav.Page==PopupPage.FoliaQueue) {
+                return WithIdentity(FoliaPillLayout.BuildQueueControls(owner,nav),nav,owner);
+            }else if(nav.Page==PopupPage.FoliaPlaylists) {
+                return WithIdentity(FoliaPillLayout.BuildPlaylistsControls(owner,nav),nav,owner);
             }
-            if(nav.Page!=PopupPage.TrayBrandColors&&nav.Page!=PopupPage.Devices&&nav.Page!=PopupPage.PickBinding) {
+            if(nav.Page!=PopupPage.TrayBrandColors&&nav.Page!=PopupPage.Devices&&nav.Page!=PopupPage.PickBinding&&nav.Page!=PopupPage.Folia) {
                 int visible=Math.Max(2,nav.VisibleChoices);
                 var preferences=preferenceSplit>0?PreferenceRows(rows,nav,visible,preferenceSplit):null;
                 if(preferences!=null)rows=preferences;
@@ -310,7 +353,7 @@ namespace AtkBatteryTray {
             float y=PageHeaderHeight;int rowWidth=VisualDesign.PanelWidth-20;
             foreach(var row in rows){float height=RowHeight(row);
                 row.Rect=new RectangleF(10,y,rowWidth,height);y+=height+2;}
-            if(nav.Page==PopupPage.TrayBrandColors){
+            if(nav.Page==PopupPage.TrayBrandColors||nav.Page==PopupPage.Folia){
                 int contentHeight=(int)y-2-PageHeaderHeight;
                 int height=nav.MaximumHeight>0?Math.Min(contentHeight,Math.Max(1,nav.MaximumHeight-PageHeaderHeight-PageFooterHeight)):contentHeight;
                 nav.Offset=Math.Max(0,Math.Min(nav.Offset,contentHeight-height));
@@ -488,7 +531,7 @@ namespace AtkBatteryTray {
             if(layout.Paged){rows.Add(new PopupControl {Id=902,Text="上一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,false),Enabled=layout.Start>0});rows.Add(new PopupControl {Id=903,Text="下一组设备",Rect=VisualDesign.FooterPageRect(layout.Footer,true),Enabled=layout.End<layout.All.Count});}
             return rows;
         }
-        internal static Size SizeFor(List<PopupControl> controls){float bottom=PageHeaderHeight;foreach(var c in controls)bottom=Math.Max(bottom,c.Viewport.HasValue?c.Viewport.Value.Bottom:c.Rect.Bottom);return new Size(VisualDesign.PanelWidth,(int)bottom+PageFooterHeight);}
+        internal static Size SizeFor(List<PopupControl> controls){if(controls.Count>0&&controls[0].LayoutKey=="folia:pill:playlists")return FoliaPillLayout.PanelWithPlaylistsSize;if(controls.Count>0&&controls[0].LayoutKey=="folia:pill")return FoliaPillLayout.PanelSize;if(controls.Count>0&&controls[0].LayoutKey=="folia:queue")return FoliaPillLayout.QueuePanelSize;if(controls.Count>0&&controls[0].LayoutKey=="folia:playlists")return FoliaPillLayout.PlaylistPanelSize;float bottom=PageHeaderHeight;foreach(var c in controls)bottom=Math.Max(bottom,c.Viewport.HasValue?c.Viewport.Value.Bottom:c.Rect.Bottom);return new Size(VisualDesign.PanelWidth,(int)bottom+PageFooterHeight);}
         internal static PopupControl Hit(List<PopupControl> controls,PointF point){foreach(var c in controls)if(c.Id>=0&&c.Enabled&&!c.Information&&c.VisibleRect.Contains(point))return c;return null;}
         internal static string StartupState() {
             return StartupDiagnostics.Describe();
@@ -502,6 +545,9 @@ namespace AtkBatteryTray {
             if(nav.Page==PopupPage.ConfirmTrayDelete)return "删除此图标？";
             if(nav.Page==PopupPage.Devices)return "设备管理";
             if(nav.Page==PopupPage.DeviceMissing)return "设备没显示？";
+            if(nav.Page==PopupPage.Folia)return "Folia 播放控制";
+            if(nav.Page==PopupPage.FoliaQueue)return "Folia 播放队列";
+            if(nav.Page==PopupPage.FoliaPlaylists)return "收藏到歌单";
             if(nav.Page==PopupPage.ManageDevice)return "显示与排序";
             if(nav.Page==PopupPage.Device)return "设备详情";
             if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==223?"配色":nav.PreferenceAction==229?"布局":nav.PreferenceAction==228?"字号":nav.PreferenceAction==224?"图标样式":nav.PreferenceAction==211?"显示规则":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
@@ -550,6 +596,18 @@ namespace AtkBatteryTray {
             }
         }
         internal static void Paint(Graphics g,TrayContext owner,PopupNavigation nav,List<PopupControl> controls,bool dark,int hover,int pressed,int focus) {
+            if(nav.Page==PopupPage.Folia&&controls.Count>0&&(controls[0].LayoutKey=="folia:pill"||controls[0].LayoutKey=="folia:pill:playlists")){
+                FoliaPillLayout.Paint(g,owner,nav,controls,dark,hover,pressed,focus);
+                return;
+            }
+            if(nav.Page==PopupPage.FoliaQueue&&controls.Count>0&&controls[0].LayoutKey=="folia:queue"){
+                FoliaPillLayout.PaintQueue(g,owner,nav,controls,dark,hover,pressed,focus);
+                return;
+            }
+            if(nav.Page==PopupPage.FoliaPlaylists&&controls.Count>0&&controls[0].LayoutKey=="folia:playlists"){
+                FoliaPillLayout.PaintPlaylists(g,owner,nav,controls,dark,hover,pressed,focus);
+                return;
+            }
             Size size=SizeFor(controls);var palette=ThemePalette.Current(dark);var fg=palette.Foreground;var muted=palette.Muted;var blue=palette.Accent;var track=palette.Track;
             g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             VisualDesign.DrawSurface(g,new RectangleF(.5f,.5f,size.Width-1,size.Height-1),dark);

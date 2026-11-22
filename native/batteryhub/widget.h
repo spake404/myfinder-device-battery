@@ -21,12 +21,21 @@ struct WidgetItem {
     Accent accent  = Accent::None;  // brand color for the icon, its glow and the level bar
 };
 
+struct FoliaWidgetState {
+    int mode = 0;       // 0 = hidden, 1 = compact (Scheme A), 2 = controls (Scheme B)
+    bool playing = false;
+    bool liked = false;
+    int loopMode = 0;   // 0 = off (顺序播放), 1 = all (列表循环), 2 = one (单曲循环)
+    std::wstring title;
+};
+
 namespace widget {
 // Creates the widget on the primary taskbar. Clicks are reported by posting `clickMsg` to `notifyWnd`.
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme);
 void Destroy();
 bool Alive();
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip);
+void SetFolia(const FoliaWidgetState& folia);
 void SetBadge(COLORREF color);
 void SetLightTheme(bool light);
 // Draws a rounded plate in the taskbar's colours behind the text (kept across Create/Destroy).

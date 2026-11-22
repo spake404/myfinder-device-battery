@@ -77,12 +77,16 @@ namespace AtkBattery {
         [DataMember(Order=34,EmitDefaultValue=false)] public string TrayBrandColor;
         [DataMember(Order=35,EmitDefaultValue=false)] public bool LowBatteryVoice;
         [DataMember(Order=36)] public bool TrayHideWhenDisconnected=true;
+        [DataMember(Order=37)] public bool FoliaEnabled=true;
+        [DataMember(Order=38)] public string FoliaTaskbarMode="controls";
+        [DataMember(Order=39)] public bool FoliaLyricsEnabled;
         [OnDeserializing] void Defaults(StreamingContext context) {
             Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
             TrayGroups=new List<TrayGroup>();TrayIconStyle=TrayConfiguration.IconPreset;UseTaskbarStrip=true;TrayHideWhenDisconnected=true;
+            FoliaEnabled=true;FoliaTaskbarMode="controls";FoliaLyricsEnabled=false;
         }
 
         public AudioBindings Clone() {
@@ -101,6 +105,9 @@ namespace AtkBattery {
             copy.TrayBrandColor=TrayBrandColor;
             copy.TrayHideWhenDisconnected=TrayHideWhenDisconnected;
             copy.LowBatteryVoice=LowBatteryVoice;
+            copy.FoliaEnabled=FoliaEnabled;
+            copy.FoliaTaskbarMode=FoliaTaskbarMode;
+            copy.FoliaLyricsEnabled=FoliaLyricsEnabled;
             copy.LastTrayIconPosition=LastTrayIconPosition==null?null:LastTrayIconPosition.Clone();
             if(TrayGroups!=null)foreach(var group in TrayGroups)copy.TrayGroups.Add(group==null?null:group.Clone());
             return copy;
@@ -204,6 +211,7 @@ namespace AtkBattery {
             settings.ThemeStyle=AtkBatteryTray.ThemePalette.Normalize(settings.ThemeStyle);
             settings.PanelLayout=AtkBatteryTray.PanelLayouts.Normalize(settings.PanelLayout);
             settings.FontSize=settings.FontSize=="large"?"large":"normal";
+            settings.FoliaTaskbarMode=settings.FoliaTaskbarMode=="compact"?"compact":"controls";
             TrayConfiguration.Normalize(settings);
             if(settings.WarningThreshold!=10&&settings.WarningThreshold!=15&&settings.WarningThreshold!=20)throw new InvalidDataException("Invalid notification threshold");
             if(settings.BackgroundSeconds!=60&&settings.BackgroundSeconds!=120&&settings.BackgroundSeconds!=300)throw new InvalidDataException("Invalid background interval");

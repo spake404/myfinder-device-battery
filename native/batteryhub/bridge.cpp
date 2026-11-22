@@ -20,6 +20,14 @@ struct TaskbarReading {
     wchar_t label[8];
 };
 
+struct FoliaReading {
+    int mode;
+    int playing;
+    int liked;
+    int loopMode;
+    wchar_t title[128];
+};
+
 extern "C" __declspec(dllexport) int TaskbarDetectBrand(const wchar_t* provider, int vid, const wchar_t* name, int kind) {
     DeviceStatus device;
     device.key = std::wstring(provider) + L":";
@@ -66,10 +74,25 @@ extern "C" __declspec(dllexport) BOOL TaskbarUpdate(const TaskbarReading* readin
     return widget::Reposition();
 }
 
+extern "C" __declspec(dllexport) BOOL TaskbarSetFolia(const FoliaReading* folia) {
+    if (!widget::Alive()) return FALSE;
+    FoliaWidgetState state;
+    if (folia) {
+        state.mode = folia->mode;
+        state.playing = folia->playing != 0;
+        state.liked = folia->liked != 0;
+        state.loopMode = folia->loopMode;
+        state.title.assign(folia->title, wcsnlen(folia->title, 128));
+    }
+    widget::SetFolia(state);
+    return widget::Reposition();
+}
+
 extern "C" __declspec(dllexport) BOOL TaskbarReposition() { return widget::Reposition(); }
 
 extern "C" __declspec(dllexport) void TaskbarDestroy() {
     widget::Destroy();
     widget::SetItems({}, L"MyFinder Device Battery");
+    widget::SetFolia({});
     widget::SetBadge(CLR_INVALID);
 }

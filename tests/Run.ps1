@@ -18,6 +18,9 @@ $appSources=@(Get-ChildItem -LiteralPath (Join-Path $root 'scripts') -Filter '*.
 $appSources+=$testMetadata
 $appSources+=@('/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
 $appSources+=('/resource:'+(Join-Path $root 'engine\device_pack_schema.json')+',DevicePackSchema')
+$appSources+=('/resource:'+(Join-Path $root 'tools\folia-bridge\mod.json')+',FoliaBridgeModJson')
+$appSources+=('/resource:'+(Join-Path $root 'tools\folia-bridge\main.cjs')+',FoliaBridgeMainCjs')
+$appSources+=('/resource:'+(Join-Path $root 'tools\folia-bridge\client.mjs')+',FoliaBridgeClientCjs')
 $packTest=Join-Path $OutputDirectory 'DevicePackTests.exe'
 & $compiler /nologo /target:exe /platform:x64 /optimize+ /define:DEVICE_PACK_TESTS /main:DevicePackTests /reference:System.Runtime.Serialization.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll "/out:$packTest" $appSources (Join-Path $PSScriptRoot 'DevicePackTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Device pack test build failed.'}

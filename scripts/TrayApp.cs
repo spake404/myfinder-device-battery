@@ -90,6 +90,7 @@ namespace AtkBatteryTray {
         bool ignoreDeactivate;
         bool feedbackModal;
         readonly System.Windows.Forms.Timer deactivateRelease=new System.Windows.Forms.Timer();
+        readonly System.Windows.Forms.Timer foliaAnimTimer=new System.Windows.Forms.Timer();
         bool deferredDeactivation;
         int deactivationEpoch;
         int hoverStage=-1;
@@ -106,6 +107,9 @@ namespace AtkBatteryTray {
         PopupControl pressedControl;
         PopupPage pressedPage;
         bool draggingVolume;
+        bool draggingFoliaSeek,draggingFoliaVolume;
+        int lastFoliaVolumeTick;
+        bool queueAcrylicApplied;
         bool volumeCollapsed;
         string panelLayout;
         int gridControlScroll;
@@ -135,6 +139,10 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll",SetLastError=true)] static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr destination,ref NativePoint position,ref NativeSize size,IntPtr source,ref NativePoint origin,int colorKey,ref NativeBlend blend,int flags);
         [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr hwnd,int index);
         [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW")] static extern IntPtr SetWindowLongPtr(IntPtr hwnd,int index,IntPtr value);
+        [DllImport("user32.dll")] static extern int SetWindowCompositionAttribute(IntPtr hwnd,ref WindowCompositionAttribData data);
+        [DllImport("dwmapi.dll",PreserveSig=true)] static extern int DwmSetWindowAttribute(IntPtr hwnd,int attribute,ref int value,int size);
+        [StructLayout(LayoutKind.Sequential)] struct WindowCompositionAttribData { public int Attribute; public IntPtr Data; public int SizeOfData; }
+        [StructLayout(LayoutKind.Sequential)] struct AccentPolicy { public int AccentState; public int AccentFlags; public uint GradientColor; public int AnimationId; }
         readonly Action<string> copyText,openLink;
         public Details(TrayContext context,Action<string> copy=null,Action<string> open=null) {
             copyText=copy??Clipboard.SetText;openLink=open??new Action<string>(delegate(string url){Process.Start(new ProcessStartInfo(url) {UseShellExecute=true});});
@@ -156,6 +164,11 @@ namespace AtkBatteryTray {
                 float t=Math.Min(1f,(float)pageClock.Elapsed.TotalMilliseconds/160f);pageProgress=1f-(float)Math.Pow(1-t,3);
                 if(t>=1f){pageProgress=1;pageAnimation.Stop();}UpdateLayoutSize();Invalidate();
             };
+            foliaAnimTimer.Interval=16;foliaAnimTimer.Tick+=delegate {
+                int elapsed=unchecked(Environment.TickCount-navigation.FoliaAnimTick);
+                if(navigation.FoliaAnimTick==0||elapsed<0||elapsed>=300){navigation.FoliaAnimActionId=0;navigation.FoliaAnimTick=0;foliaAnimTimer.Stop();}
+                Invalidate();
+            };
             deactivateRelease.Interval=16;deactivateRelease.Tick+=delegate {CheckDeferredDeactivation();};
             Activated+=delegate {CancelDeferredDeactivation();};
             Deactivate+=delegate {HandleDeactivation();};
@@ -167,24 +180,38 @@ namespace AtkBatteryTray {
                 pressedControl=PopupPages.Hit(ControlsForPage(),PanelPoint(e.Location));pressedPage=navigation.Page;
                 pressedAction=pressedControl==null?-1:pressedControl.Id;
                 if(pressedAction==240&&owner.Audio!=null){draggingVolume=true;volumeEndpoint=owner.Audio.VolumeEndpointId;navigation.VolumePreview=PopupPages.VolumeAt(pressedControl.Rect,PanelPoint(e.Location).X);Capture=true;}
+                else if(pressedAction==826&&owner.FoliaState!=null&&owner.FoliaState.Duration>0){draggingFoliaSeek=true;navigation.FoliaSeekPreview=FoliaPillLayout.RatioAt(pressedControl.Rect,PanelPoint(e.Location).X);Capture=true;}
+                else if(pressedAction==827&&owner.FoliaState!=null){draggingFoliaVolume=true;navigation.FoliaVolumePreview=FoliaPillLayout.RatioAt(new RectangleF(pressedControl.Rect.X+4,pressedControl.Rect.Y,pressedControl.Rect.Width-8,pressedControl.Rect.Height),PanelPoint(e.Location).X);Capture=true;}
                 Invalidate();
             };
             MouseUp+=delegate(object sender,MouseEventArgs e) {
                 if(e.Button!=MouseButtons.Left||closing)return;
                 var target=PopupPages.Hit(ControlsForPage(),PanelPoint(e.Location));
                 var pressed=pressedControl;var page=pressedPage;bool wasDragging=draggingVolume;
+                bool wasFoliaSeek=draggingFoliaSeek;double seekRatio=navigation.FoliaSeekPreview;
+                bool wasFoliaVol=draggingFoliaVolume;double foliaVol=navigation.FoliaVolumePreview;
                 int value=navigation.VolumePreview;string endpoint=volumeEndpoint;
                 HidePointerTip();
                 CancelPointerInteraction();keyboardFocus=-1;keyboardFocusKey=null;
                 // Releasing capture cancels the stored interaction synchronously.
                 // Commit only the valid drag snapshot taken before that callback.
                 if(wasDragging){if(pressed!=null&&pressed.Id==240&&page==navigation.Page&&value>=0&&value<=100&&VolumeTargetAvailable(endpoint))owner.SelectOutputVolume(endpoint,value);}
+                else if(wasFoliaSeek){var fs=owner.FoliaState;if(pressed!=null&&pressed.Id==826&&page==navigation.Page&&fs!=null&&fs.Duration>0&&seekRatio>=0){double sec=Math.Max(0,Math.Min(fs.Duration,seekRatio*fs.Duration));owner.SendFoliaCommand("seek",sec.ToString("F2",System.Globalization.CultureInfo.InvariantCulture));}}
+                else if(wasFoliaVol){if(pressed!=null&&pressed.Id==827&&page==navigation.Page&&foliaVol>=0){owner.SendFoliaCommand("volume",Math.Max(0,Math.Min(1,foliaVol)).ToString("F3",System.Globalization.CultureInfo.InvariantCulture));}}
                 else if(target!=null&&pressed!=null&&PopupPages.SameAction(target,pressed)&&page==navigation.Page&&target.Rect==pressed.Rect&&target.VisibleRect==pressed.VisibleRect)PerformAction(target);
                 Invalidate();
             };
             MouseMove+=delegate(object sender,MouseEventArgs e) {
                 var point=PanelPoint(e.Location);
                 if(draggingVolume&&pressedControl!=null){navigation.VolumePreview=PopupPages.VolumeAt(pressedControl.Rect,point.X);Invalidate();return;}
+                if(draggingFoliaSeek&&pressedControl!=null){navigation.FoliaSeekPreview=FoliaPillLayout.RatioAt(pressedControl.Rect,point.X);Invalidate();return;}
+                if(draggingFoliaVolume&&pressedControl!=null){
+                    double v=FoliaPillLayout.RatioAt(new RectangleF(pressedControl.Rect.X+4,pressedControl.Rect.Y,pressedControl.Rect.Width-8,pressedControl.Rect.Height),point.X);
+                    navigation.FoliaVolumePreview=v;
+                    int tick=Environment.TickCount;
+                    if(unchecked(tick-lastFoliaVolumeTick)>=60){lastFoliaVolumeTick=tick;owner.SendFoliaCommand("volume",v.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));}
+                    Invalidate();return;
+                }
                 var controls=ControlsForPage();var target=PopupPages.Hit(controls,point);int next=target==null?-1:target.Id;
                 var tipTarget=target??controls.Find(delegate(PopupControl c){return c.VisibleRect.Contains(point);});
                 string tip=tipTarget==null?null:tipTarget.Text+(String.IsNullOrEmpty(tipTarget.Value)?"":"："+tipTarget.Value)+(String.IsNullOrEmpty(tipTarget.Detail)?"":"\n"+tipTarget.Detail);
@@ -197,7 +224,7 @@ namespace AtkBatteryTray {
             };
             MouseLeave+=delegate {lastHoverTip=null;hoverAction=-1;hoverStage=-1;hoverRefresh=false;hoverSettings=false;hoverAudio=-1;controlTip.SetToolTip(this,null);Cursor=Cursors.Default;Invalidate();};
             MouseWheel+=delegate(object sender,MouseEventArgs e) {
-                if(navigation.Page==PopupPage.TrayBrandColors){
+                if(navigation.Page==PopupPage.TrayBrandColors||navigation.Page==PopupPage.Folia||navigation.Page==PopupPage.FoliaQueue||navigation.Page==PopupPage.FoliaPlaylists){
                     if(e.Delta!=0)ScrollBrandColors(navigation.Offset+Math.Sign(-e.Delta)*Math.Max(1,Math.Abs(e.Delta)/120)*(VisualDesign.LargeFont?40:36));
                 }
                 else if(navigation.Page!=PopupPage.Main){navigation.Offset=Math.Max(0,navigation.Offset+(e.Delta<0?1:-1));UpdateLayoutSize();Invalidate();}
@@ -216,7 +243,7 @@ namespace AtkBatteryTray {
             };
         }
         void CancelPointerInteraction(bool releaseCapture=true) {
-            draggingVolume=false;navigation.VolumePreview=-1;volumeEndpoint=null;pressedControl=null;pressedAction=-1;pressedPage=navigation.Page;
+            draggingVolume=false;draggingFoliaSeek=false;draggingFoliaVolume=false;navigation.VolumePreview=-1;navigation.FoliaSeekPreview=-1;navigation.FoliaVolumePreview=-1;volumeEndpoint=null;pressedControl=null;pressedAction=-1;pressedPage=navigation.Page;
             if(releaseCapture&&Capture)Capture=false;
         }
         void HidePointerTip(){
@@ -271,7 +298,7 @@ namespace AtkBatteryTray {
         PopupControl RevealControl(PopupControl control){
             if(control==null)return null;
             if(navigation.Page==PopupPage.Main&&VisualDesign.GridLayout)return RevealGridControl(control);
-            if(navigation.Page!=PopupPage.TrayBrandColors||!control.Viewport.HasValue)return control;
+            if((navigation.Page!=PopupPage.TrayBrandColors&&navigation.Page!=PopupPage.Folia)||!control.Viewport.HasValue)return control;
             var viewport=control.Viewport.Value;
             float delta=control.Rect.Top<viewport.Top?control.Rect.Top-viewport.Top:Math.Max(0,control.Rect.Bottom-viewport.Bottom);
             if(delta==0)return control;
@@ -297,6 +324,7 @@ namespace AtkBatteryTray {
             pageStartHeight=targetSize.Height;string stable=keyboardFocusKey;int focus=keyboardFocus>=0?keyboardFocus:hoverAction;if(stable==null){var hovered=ControlsForPage().Find(delegate(PopupControl c){return c.Id==focus;});if(hovered!=null)stable=hovered.StableKey;}navigation.Go(page,focus,stable);SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;StartPageMotion();
         }
         public void ShowPreferences(){Go(PopupPage.Preferences);}
+        public void ShowFolia(){Go(PopupPage.Folia);}
         internal string CurrentPage {get{return navigation.Page.ToString();}}
         void Back() {pageStartHeight=targetSize.Height;keyboardFocus=navigation.Back();keyboardFocusKey=navigation.ReturnedFocusKey;SyncAudioScope();StartPageMotion();var controls=ControlsForPage();ReconcileKeyboardFocus(controls);if(navigation.Page==PopupPage.Main&&VisualDesign.GridLayout&&keyboardFocusKey!=null)FocusControl(PopupPages.FindStable(controls,keyboardFocusKey));}
         void StartPageMotion(){CancelPointerInteraction();hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageProgress=PopupPages.Reduced?1:0;pageClock.Restart();if(pageProgress==0)pageAnimation.Start();UpdateLayoutSize();Invalidate();}
@@ -340,6 +368,8 @@ namespace AtkBatteryTray {
                     owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
                 if(id==210||id==213||id==216||id==223||id==224||id==228||id==229){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
+                if(id==811){navigation.PreferenceAction=811;Go(PopupPage.ChoosePreference);return;}
+                if((id==812||id==813)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==811){pref.FoliaTaskbarMode=id==812?"compact":"controls";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
                 if(id>=470&&id<=472&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==229){
                     pref.PanelLayout=PanelLayouts.Keys[id-470];navigation.DeviceScroll=0;owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
@@ -377,14 +407,38 @@ namespace AtkBatteryTray {
                 else if(id>=230&&id<=232){navigation.BindingRole=id==230?"speaker":id==231?"headset":"microphone";Go(PopupPage.PickBinding);return;}
                 else if(id==233){DeviceSettings.ResetAudioForDevice(navigation.AudioDeviceKey);owner.ConfigurationChanged();navigation.Notice=navigation.AudioDeviceKey==null?"已恢复自动识别":"已清除此设备的音频绑定";Invalidate();return;}
                 else if(id==7||id==8){navigation.Offset=control.PageOffset>=0?control.PageOffset:Math.Max(0,navigation.Offset+(id==7?-navigation.VisibleChoices:navigation.VisibleChoices));UpdateLayoutSize();Invalidate();return;}
-                else if(id>=300){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
+                else if(id>=300&&navigation.Page==PopupPage.PickBinding){DeviceSettings.SetEndpointForDevice(navigation.AudioDeviceKey,navigation.BindingRole,control.EndpointId);owner.ConfigurationChanged();Back();navigation.Notice="绑定已保存，当前音源未更改";Invalidate();return;}
                 else if(id==250){copyText(owner.DiagnosticSummary());navigation.Notice="已复制诊断摘要（不含序列号和路径）";Invalidate();return;}
                 else if(id==258){ShowFeedback();return;}
                 else if(id==262){ShowMyFeedback();return;}
                 else if(id==259){openLink("https://github.com/wushuai0802/myfinder-device-battery/blob/main/docs/compatibility.md");return;}
+                else if(id==800){owner.RefreshFoliaDetails();Go(PopupPage.Folia);return;}
+                else if(id==810){pref.FoliaEnabled=!pref.FoliaEnabled;}
+                else if(id==820){owner.SendFoliaCommand("toggle");return;}
+                else if(id==821){owner.SendFoliaCommand("previous");return;}
+                else if(id==822){owner.SendFoliaCommand("next");return;}
+                else if(id==823){StartFoliaButtonAnim(id);owner.SendFoliaCommand("like");return;}
+                else if(id==824){owner.SendFoliaCommand("loop");return;}
+                else if(id==825){StartFoliaButtonAnim(id);owner.SendFoliaCommand("shuffle");return;}
+                else if(id==828){StartFoliaButtonAnim(id);navigation.FoliaVolumeOpen=!navigation.FoliaVolumeOpen;Invalidate();return;}
+                else if(id==829){bool ok=FoliaBridgeInstaller.EnsureBridgeInstalled();navigation.Notice=ok?"已部署桥接模组，请在 Folia 模组页启用":"未检测到 Folia 安装目录";Invalidate();return;}
+                else if(id==830){owner.RefreshFoliaDetails();Go(PopupPage.FoliaQueue);var q=owner.FoliaQueue;if(q!=null&&q.CurrentIndex>2){navigation.Offset=Math.Max(0,q.CurrentIndex*FoliaPillLayout.QueueStepHeight-160);UpdateLayoutSize();Invalidate();}return;}
+                else if(id==831){StartFoliaButtonAnim(id);owner.OpenFoliaMainWindow();return;}
+                else if(id==832){StartFoliaButtonAnim(id);pref.FoliaLyricsEnabled=!pref.FoliaLyricsEnabled;}
+                else if(id==833){StartFoliaButtonAnim(id);if(navigation.Page==PopupPage.Folia){navigation.FoliaPlaylistsOpen=!navigation.FoliaPlaylistsOpen;if(navigation.FoliaPlaylistsOpen){navigation.Offset=0;owner.RefreshFoliaPlaylists();}UpdateLayoutSize();Invalidate();}else{owner.RefreshFoliaPlaylists();Go(PopupPage.FoliaPlaylists);}return;}
+                else if(id==834){navigation.FoliaPlaylistsOpen=false;UpdateLayoutSize();Invalidate();return;}
+                else if(id>=850&&id<2000&&navigation.Page==PopupPage.FoliaQueue){owner.SendFoliaCommand("playQueueItem",(id-850).ToString(System.Globalization.CultureInfo.InvariantCulture));Back();return;}
+                else if(id>=2000&&id<2500&&(navigation.Page==PopupPage.FoliaPlaylists||navigation.Page==PopupPage.Folia)){var snap=owner.FoliaPlaylists;int idx=id-2000;if(snap!=null&&snap.Items!=null&&idx>=0&&idx<snap.Items.Length){var pl=snap.Items[idx];owner.AddToFoliaPlaylist(pl.Id,pl.Liked);navigation.Notice="已添加到「"+pl.Name+"」";}if(navigation.Page==PopupPage.Folia){navigation.FoliaPlaylistsOpen=false;UpdateLayoutSize();Invalidate();}else Back();return;}
                 else return;
                 owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();
             }catch(Exception error){navigation.Notice="未保存："+error.Message;Invalidate();}
+        }
+        void StartFoliaButtonAnim(int actionId) {
+            navigation.FoliaAnimActionId=actionId;
+            navigation.FoliaAnimTick=Environment.TickCount;
+            if(navigation.FoliaAnimTick==0)navigation.FoliaAnimTick=1;
+            foliaAnimTimer.Start();
+            Invalidate();
         }
         void PerformTrayAction(PopupControl control,AudioBindings pref){
             string action=control.ActionKey;
@@ -463,7 +517,7 @@ namespace AtkBatteryTray {
                 if(current!=null&&keys==Keys.Tab){FocusControl(targets.Find(delegate(PopupControl c){return c.Viewport.HasValue||c.Rect.Top>=layout.Grid.Controls.Top;}));return true;}
             }
             if(keyboardFocus==240&&(keys==Keys.Left||keys==Keys.Right)&&owner.Audio!=null&&owner.Audio.OutputVolumePercent.HasValue){var slider=controls.Find(delegate(PopupControl row){return row.Id==240&&row.Enabled&&row.Slider;});if(slider!=null)SetSliderValue(slider,(owner.DesiredVolume??owner.Audio.OutputVolumePercent.Value)+(keys==Keys.Left?-2:2));return true;}
-            if(keys==Keys.Tab||keys==(Keys.Tab|Keys.Shift)||keys==Keys.Right||keys==Keys.Left||navigation.Page==PopupPage.TrayBrandColors&&(keys==Keys.Up||keys==Keys.Down)) {
+            if(keys==Keys.Tab||keys==(Keys.Tab|Keys.Shift)||keys==Keys.Right||keys==Keys.Left||(navigation.Page==PopupPage.TrayBrandColors||navigation.Page==PopupPage.Folia)&&(keys==Keys.Up||keys==Keys.Down)) {
                 if(targets.Count==0)return true;int direction=keys==(Keys.Tab|Keys.Shift)||keys==Keys.Left||keys==Keys.Up?-1:1,index=targets.FindIndex(delegate(PopupControl c){return c.StableKey==keyboardFocusKey;});
                 FocusControl(targets[(index<0?(direction>0?0:targets.Count-1):(index+direction+targets.Count)%targets.Count)]);return true;
             }
@@ -473,7 +527,7 @@ namespace AtkBatteryTray {
             }
             return base.ProcessCmdKey(ref message,keys);
         }
-        void FocusControl(PopupControl control){if(control!=null&&(navigation.Page==PopupPage.TrayBrandColors||navigation.Page==PopupPage.Main&&VisualDesign.GridLayout))control=RevealControl(PopupPages.FindStable(ControlsForPage(),control.StableKey));keyboardFocusVisible=true;HidePointerTip();keyboardFocus=control==null?-1:control.Id;keyboardFocusKey=control==null?null:control.StableKey;keyboardFocusIndex=control==null?0:ControlsForPage().FindIndex(delegate(PopupControl c){return c.StableKey==control.StableKey;});AccessibilityNotifyClients(AccessibleEvents.Focus,-1);Invalidate();}
+        void FocusControl(PopupControl control){if(control!=null&&(navigation.Page==PopupPage.TrayBrandColors||navigation.Page==PopupPage.Folia||navigation.Page==PopupPage.Main&&VisualDesign.GridLayout))control=RevealControl(PopupPages.FindStable(ControlsForPage(),control.StableKey));keyboardFocusVisible=true;HidePointerTip();keyboardFocus=control==null?-1:control.Id;keyboardFocusKey=control==null?null:control.StableKey;keyboardFocusIndex=control==null?0:ControlsForPage().FindIndex(delegate(PopupControl c){return c.StableKey==control.StableKey;});AccessibilityNotifyClients(AccessibleEvents.Focus,-1);Invalidate();}
         void ReconcileKeyboardFocus(List<PopupControl> controls){if(keyboardFocus<0&&keyboardFocusKey==null)return;if(keyboardFocusKey==null){var previous=controls.Find(delegate(PopupControl c){return c.Id==keyboardFocus;});if(previous!=null)keyboardFocusKey=previous.StableKey;}
             var next=navigation.Page==PopupPage.Main&&VisualDesign.GridLayout?PopupPages.FindStable(controls,keyboardFocusKey):PopupPages.ReconcileFocus(controls,keyboardFocusKey,keyboardFocusIndex);keyboardFocus=next==null?-1:next.Id;keyboardFocusKey=next==null?null:next.StableKey;}
         protected override AccessibleObject CreateAccessibilityInstance(){return new PopupAccessibility(this,ControlsForPage,delegate{return keyboardFocus;},PerformAction,delegate{return dpiScale;},FocusControl,SetSliderValue);}
@@ -522,7 +576,38 @@ namespace AtkBatteryTray {
                 ClientSize=physical;
                 if(!layeredRendering)UpdateFallbackRegion();
             }
+            SyncQueueAcrylic();
             PositionForSize((int)Math.Round((1-animationProgress)*6));
+        }
+        void SyncQueueAcrylic() {
+            if(!IsHandleCreated||!layeredRendering)return;
+            bool want=navigation.Page==PopupPage.FoliaQueue||navigation.Page==PopupPage.FoliaPlaylists;
+            if(!want&&!queueAcrylicApplied)return;
+            if(want){
+                int corner=2;
+                DwmSetWindowAttribute(Handle,33,ref corner,4);
+                var accent=new AccentPolicy { AccentState=4, AccentFlags=2, GradientColor=Style.Dark?0x381E1E22u:0x28F2F2F5u, AnimationId=0 };
+                int sz=Marshal.SizeOf(typeof(AccentPolicy));
+                IntPtr ptr=Marshal.AllocHGlobal(sz);
+                try{
+                    Marshal.StructureToPtr(accent,ptr,false);
+                    var data=new WindowCompositionAttribData { Attribute=19, Data=ptr, SizeOfData=sz };
+                    SetWindowCompositionAttribute(Handle,ref data);
+                }finally{Marshal.FreeHGlobal(ptr);}
+                queueAcrylicApplied=true;
+            } else {
+                int corner=0;
+                DwmSetWindowAttribute(Handle,33,ref corner,4);
+                var accent=new AccentPolicy { AccentState=0 };
+                int sz=Marshal.SizeOf(typeof(AccentPolicy));
+                IntPtr ptr=Marshal.AllocHGlobal(sz);
+                try{
+                    Marshal.StructureToPtr(accent,ptr,false);
+                    var data=new WindowCompositionAttribData { Attribute=19, Data=ptr, SizeOfData=sz };
+                    SetWindowCompositionAttribute(Handle,ref data);
+                }finally{Marshal.FreeHGlobal(ptr);}
+                queueAcrylicApplied=false;
+            }
         }
         void UpdateFallbackRegion() {
             Region mask;
@@ -576,15 +661,15 @@ namespace AtkBatteryTray {
             base.OnHandleCreated(e);if(ignoreDeactivate)QueueOpeningGuardRelease(presentationEpoch);
         }
         public void OpenAnimated(bool fromLauncher=false) {OpenAnimatedCore(fromLauncher,null);}
-        internal void OpenFromTray(Point point){OpenAnimatedCore(false,null,point);}
+        internal void OpenFromTray(Point point,PopupPage page=PopupPage.Main){OpenAnimatedCore(false,null,point,page);}
         internal void OpenUpdated(TrayPanelAnchor placement){OpenAnimatedCore(false,placement);}
-        void OpenAnimatedCore(bool fromLauncher,TrayPanelAnchor? placement,Point? click=null) {
+        void OpenAnimatedCore(bool fromLauncher,TrayPanelAnchor? placement,Point? click=null,PopupPage page=PopupPage.Main) {
             if(disposingPopup||Disposing||IsDisposed)return;
             presentationDepth++;
             try {
                 BeginPresentation();updatedAnchor=placement;anchor=placement.HasValue?placement.Value.Point:click??owner.CursorPosition();
                 if(!placement.HasValue&&fromLauncher){var screen=PanelWorkArea;anchor=new Point(screen.Right-24,screen.Top+16);}
-                dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage();UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;BeginBatteryOpening();
+                dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage(page);UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;BeginBatteryOpening();
                 frameAlpha=3;PositionForSize(6);Show();Activate();owner.PanelOpened();AnimateTo(1f,190f);
             } finally {
                 // Native Show/Activate can pump HandleCreated callbacks before setup finishes.
@@ -603,13 +688,15 @@ namespace AtkBatteryTray {
             // A size-capped panel may have less than a full margin available.
             Location=new Point(Math.Max(screen.Left,Math.Min(x,screen.Right-Width)),Math.Max(screen.Top,Math.Min(y,screen.Bottom-Height)));
         }
-        public void Reveal(Point? click=null) {
+        public void Reveal(Point? click=null) {Reveal(click,PopupPage.Main);}
+        internal void Reveal(Point? click,PopupPage page) {
             if(disposingPopup||Disposing||IsDisposed)return;
             presentationDepth++;
             try {
                 BeginPresentation();
                 if(click.HasValue){updatedAnchor=null;anchor=click.Value;dpiScale=NativeDisplay.ScaleAt(anchor);}
-                ResetPage();
+                ResetPage(page);
+                if(click.HasValue)PositionForSize(0);
                 if(closing){closing=false;BeginBatteryOpening();owner.PanelOpened();AnimateTo(1f,190f);}
                 Show();Activate();
             } finally {presentationDepth--;if(presentationDepth==0)QueueOpeningGuardRelease(presentationEpoch);}
@@ -646,7 +733,7 @@ namespace AtkBatteryTray {
             if(closing)Reveal();
             else CloseAnimated();
         }
-        void ResetPage(){updatedNotice=null;updatedNoticeTimer.Stop();CancelPointerInteraction();gridControlScroll=0;gridControlKey=null;gridFocusNeedsReveal=false;navigation.Reset();SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;keyboardFocusVisible=false;hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
+        void ResetPage(PopupPage page=PopupPage.Main){updatedNotice=null;updatedNoticeTimer.Stop();CancelPointerInteraction();gridControlScroll=0;gridControlKey=null;gridFocusNeedsReveal=false;navigation.Reset();if(page!=PopupPage.Main)navigation.Page=page;SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;keyboardFocusVisible=false;hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
         void BeginBatteryOpening(){batteryOpening=!PopupPages.Reduced;batteryProgress=batteryOpening?0:1;}
         void AnimateTo(float target,float durationMs) {
             if(PopupPages.Reduced){animationProgress=target;batteryOpening=false;batteryProgress=1;frameAlpha=target>0? (byte)255:(byte)0;animation.Stop();motionClock.Stop();if(target==0&&closing){Hide();Dispose();return;}if(!layeredRendering)Opacity=1;Invalidate();return;}
@@ -733,6 +820,8 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(preferences.AutoCheckUpdates).Append('|').Append(preferences.ShowUpdateBadge).Append('|').Append(preferences.IncludeBetaUpdates).Append('|').Append(owner.UpdateStatus).Append('|').Append(owner.UpdateDotColor.ToArgb()).Append('|').Append(preferences.CheckFeedbackReplies).Append('|').Append(owner.FeedbackReplies.Store.Unread);
             visible.Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint).Append('|').Append(preferences.AutoCreateTrayGroups).Append('|').Append(preferences.TrayBrandColor).Append('|').Append(preferences.TrayHideWhenDisconnected);
             visible.Append('|').Append(preferences.LowBatteryVoice);
+            int foliaAnimStep=navigation.FoliaAnimTick==0?0:unchecked(Environment.TickCount-navigation.FoliaAnimTick);
+            visible.Append('|').Append(preferences.FoliaEnabled).Append('|').Append(preferences.FoliaLyricsEnabled).Append('|').Append(preferences.FoliaTaskbarMode).Append('|').Append(owner.FoliaRenderKey).Append('|').Append(navigation.FoliaVolumeOpen).Append('|').Append(navigation.FoliaPlaylistsOpen).Append('|').Append(navigation.FoliaSeekPreview.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)).Append('|').Append(navigation.FoliaVolumePreview.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)).Append('|').Append(navigation.FoliaAnimActionId).Append('|').Append(foliaAnimStep);
             foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId).Append('|').Append(group.BrandColor).Append('|').Append(group.HideWhenDisconnected);foreach(string id in group.Members)visible.Append('|').Append(id);}
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
             if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name).Append('|').Append(device.FormFactor);
@@ -840,6 +929,8 @@ namespace AtkBatteryTray {
         readonly ToolStripMenuItem audioSettingsMenu=new ToolStripMenuItem("音源设置") {Tag="speaker"};
         readonly System.Windows.Forms.Timer deviceDebounce=new System.Windows.Forms.Timer();
         readonly System.Windows.Forms.Timer expiryTimer=new System.Windows.Forms.Timer(),audioDebounce=new System.Windows.Forms.Timer(),operationTimer=new System.Windows.Forms.Timer();
+        readonly FoliaClient folia;
+        readonly System.Windows.Forms.Timer foliaTimer=new System.Windows.Forms.Timer {Interval=1000};
         readonly SnapshotWriter fileWriter=new SnapshotWriter();
         readonly LowBatteryPolicy lowBattery=new LowBatteryPolicy();
         readonly bool persistStatus;
@@ -958,6 +1049,16 @@ namespace AtkBatteryTray {
             deviceDebounce.Interval=1200;deviceDebounce.Tick+=delegate {deviceDebounce.Stop();RefreshBattery(false);};
             deviceEvents=new DeviceEventsWindow(delegate {if(!disposed){ActivityTopologyChanged();deviceDebounce.Stop();deviceDebounce.Start();}},delegate{Style.InvalidateTheme();UpdateIcon();},delegate(bool locked){sessionLocked=locked;refresh.Interval=locked?Math.Max(300000,DeviceSettings.Current.BackgroundSeconds*1000):DeviceSettings.Current.BackgroundSeconds*1000;if(locked){activityTimer.Stop();if(details!=null&&!details.IsDisposed)details.CloseAnimated();}else{deviceDebounce.Stop();deviceDebounce.Start();}},delegate{if(!disposed){if(taskbarStrip!=null)taskbarStrip.Reset();trayIcons.RecreateAll();UpdateIcon();}});
             taskbarStrip=new TaskbarStrip(trayIcons.SuppressAll,HandleTaskbarClick);
+            folia=new FoliaClient(delegate{if(disposed)return;try{dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)UpdateIcon();});}catch(InvalidOperationException){}});
+            if(FoliaBridgeInstaller.IsFoliaInstalled())FoliaBridgeInstaller.EnsureBridgeInstalled();
+            foliaTimer.Tick+=delegate{
+                if(disposed)return;
+                bool fast=panelOpen&&folia.FoliaRunning;
+                foliaTimer.Interval=fast?400:1000;
+                folia.PollAsync();
+            };
+            foliaTimer.Start();
+            folia.PollAsync(true);
             UpdateIcon();
             try{mouseActivity=new MouseActivityListener(HandleMouseActivity,delegate(Action action){if(!disposed)dispatch.BeginInvoke((MethodInvoker)delegate{if(!disposed)action();});});activityListenerState="ready";}catch(Exception){activityListenerState="unavailable";SafeDiagnostic.Transition("mouse_activity","unavailable");}
             audioDebounce.Interval=200;audioDebounce.Tick+=delegate{audioDebounce.Stop();RequestAudioRead(true);};
@@ -1048,10 +1149,34 @@ namespace AtkBatteryTray {
             if(disposed)return;
             if(message==0x0201)HandleTrayMouseDown(MouseButtons.Left);
             else if(message==0x0202)HandleTrayMouseUp(MouseButtons.Left,point);
+            else if(message==0x8001){SendFoliaCommand("previous");}
+            else if(message==0x8002){SendFoliaCommand("toggle");}
+            else if(message==0x8003){SendFoliaCommand("next");}
+            else if(message==0x8004||message==0x8005){ShowFoliaFromTaskbar(point);}
+            else if(message==0x8006){SendFoliaCommand("loop");}
             else if(message==0x0205){
                 taskbarMenuOrigin=point;
                 try{tray.ContextMenuStrip.Show(point);}finally{taskbarMenuOrigin=null;}
             }
+        }
+        internal bool FoliaRunning {get{return folia!=null&&folia.FoliaRunning;}}
+        internal bool FoliaConnected {get{return folia!=null&&folia.Connected;}}
+        internal FoliaState FoliaState {get{return folia==null?null:folia.State;}}
+        internal FoliaQueueSnapshot FoliaQueue {get{return folia==null?null:folia.Queue;}}
+        internal int FoliaQueueCount {get{var q=FoliaQueue;return q==null?0:q.Total>0?q.Total:(q.Items==null?0:q.Items.Length);}}
+        internal FoliaPlaylistsSnapshot FoliaPlaylists {get{return folia==null?null:folia.Playlists;}}
+        internal int FoliaPlaylistCount {get{var p=FoliaPlaylists;return p==null||p.Items==null?0:p.Items.Length;}}
+        internal Image GetPlaylistCover(string url){return folia==null?null:folia.GetCoverImage(url);}
+        internal string FoliaRenderKey {get{var s=FoliaState;var p=FoliaPlaylists;int covers=folia==null?0:folia.CoverCacheCount;return (FoliaRunning?"1":"0")+"|"+(s==null?"":s.Signature)+"|"+FoliaQueueCount+"|"+FoliaPlaylistCount+"|"+covers+"|"+(p==null||p.Error==null?"":p.Error);}}
+        internal void SendFoliaCommand(string action,string rawJsonValue=null){if(folia!=null)folia.SendCommand(action,rawJsonValue);}
+        internal void OpenFoliaMainWindow(){if(folia!=null)folia.OpenMainWindow();}
+        internal void RefreshFoliaDetails(){if(folia!=null)folia.RefreshDetailsAsync();}
+        internal void RefreshFoliaPlaylists(){if(folia!=null)folia.RefreshPlaylistsAsync();}
+        internal void AddToFoliaPlaylist(string playlistId,bool isLikedPlaylist){if(folia!=null)folia.AddToPlaylist(playlistId,isLikedPlaylist);}
+        void ShowFoliaFromTaskbar(Point point) {
+            if(details!=null&&!details.IsDisposed&&!details.IsClosing&&details.CurrentPage=="Folia"){details.CloseAnimated();return;}
+            RefreshFoliaDetails();
+            if(details==null||details.IsDisposed){details=new Details(this);details.OpenFromTray(point,PopupPage.Folia);}else details.Reveal(point,PopupPage.Folia);
         }
         void ShowDetails(bool fromLauncher=false) {
             if(details!=null&&!details.IsDisposed){details.Reveal();return;}
@@ -1168,7 +1293,8 @@ namespace AtkBatteryTray {
             trayIcons.Sync(preferences.TrayGroups);
             for(int index=0;index<preferences.TrayGroups.Count;index++)
                 trayIcons.For(preferences.TrayGroups[index].Id).Update(views[index+1],dark,size);
-            if(taskbarStrip!=null)taskbarStrip.Update(preferences.UseTaskbarStrip,views,!Style.TaskbarDark,preferences.WarningThreshold);
+            int foliaMode=preferences.FoliaEnabled&&FoliaRunning?FoliaModes.TaskbarModeValue(preferences.FoliaTaskbarMode):0;
+            if(taskbarStrip!=null)taskbarStrip.Update(preferences.UseTaskbarStrip,views,!Style.TaskbarDark,preferences.WarningThreshold,foliaMode,FoliaState);
             if(details!=null&&!details.IsDisposed)details.SyncDevices();
             if(persistStatus&&preferences.LowBatteryNotifications)EvaluateLowBattery(mouse,headset,preferences);
             ScheduleExpiry();
@@ -1718,7 +1844,7 @@ namespace AtkBatteryTray {
             if(feedbackChecks!=null)feedbackChecks.Dispose();if(feedbackDialog!=null&&!feedbackDialog.IsDisposed)feedbackDialog.Close();
             if(devicePackChecks!=null)devicePackChecks.Dispose();
             if(updatedPanelRequest!=null)updatedPanelRequest.Dispose();
-            disposed=true;if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;
+            disposed=true;foliaTimer.Stop();foliaTimer.Dispose();if(folia!=null)folia.Dispose();if(mouseActivity!=null)mouseActivity.Dispose();activityTimer.Stop();activityTimer.Dispose();activityRefresh.Dispose();refresh.Stop();refresh.Dispose();liveSync.Stop();liveSync.Dispose();deviceDebounce.Stop();deviceDebounce.Dispose();expiryTimer.Dispose();audioDebounce.Dispose();operationTimer.Dispose();if(deviceEvents!=null)deviceEvents.Dispose();if(audioEvents!=null){var listener=audioEvents;ThreadPool.QueueUserWorkItem(delegate{listener.Dispose();});}tray.Visible=false;
             if(genericWorker!=null)genericWorker.Dispose();
             if(persistStatus)AudioBrokerClient.Shutdown();fileWriter.Dispose();
             if(details!=null){details.Close();details.Dispose();}var menu=tray.ContextMenuStrip;balloonExpiry.Dispose();if(taskbarStrip!=null)taskbarStrip.Dispose();trayIcons.Dispose();if(menu!=null)menu.Dispose();dispatch.Dispose();base.ExitThreadCore();

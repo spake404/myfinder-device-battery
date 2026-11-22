@@ -55,6 +55,9 @@ using System.Reflection;
 $uiSources=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Where-Object {$_.Name -notin @('Probe.cs','Tests.cs','AssemblyInfo.cs')} | Sort-Object Name | ForEach-Object {$_.FullName})
 $uiSources+=@('/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
 $uiSources+=('/resource:'+(Join-Path $projectRoot 'engine\device_pack_schema.json')+',DevicePackSchema')
+$uiSources+=('/resource:'+(Join-Path $projectRoot 'tools\folia-bridge\mod.json')+',FoliaBridgeModJson')
+$uiSources+=('/resource:'+(Join-Path $projectRoot 'tools\folia-bridge\main.cjs')+',FoliaBridgeMainCjs')
+$uiSources+=('/resource:'+(Join-Path $projectRoot 'tools\folia-bridge\client.mjs')+',FoliaBridgeClientCjs')
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/win32icon:$iconPath" "/win32manifest:$manifestPath" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Accessibility.dll /reference:System.Runtime.Serialization.dll "/out:$(Join-Path $buildOutput 'AtkMouseBattery.exe')" $uiSources $assembly
 if ($LASTEXITCODE -ne 0) { throw 'Tray build failed.' }
 & (Join-Path $buildOutput 'AtkBatteryProbe.exe') --self-test

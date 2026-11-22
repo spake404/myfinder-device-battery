@@ -1,0 +1,19 @@
+{
+  "folium": 1,
+  "id": "myfinder-folia-bridge",
+  "name": "MyFinder 设备电量联动桥接",
+  "version": "1.0.0",
+  "author": "spake404",
+  "description": "将 Folia 的播放状态、实时歌词、播放队列与控制指令桥接到 MyFinder Device Battery 任务栏与控制面板。",
+  "main": "main.cjs",
+  "client": "client.mjs",
+  "permissions": [
+    "playback.read",
+    "playback.control",
+    "platform.netease.read",
+    "platform.netease.write"
+  ],
+  "experimental": [
+    "platform.raw"
+  ]
+}

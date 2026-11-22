@@ -110,6 +110,12 @@ static class UiMenusTests {
             Check(!DeviceSettings.Current.CheckFeedbackReplies&&f.Saves==1,"feedback checking toggle uses the existing configuration writer");
             var beta=f.Find("提醒测试版更新");Check(beta.Id==227&&beta.Checked,"beta update reminders default on in the settings page");f.Activate(beta);
             Check(!DeviceSettings.Current.IncludeBetaUpdates&&f.Saves==2,"beta reminder toggle uses the existing configuration writer");
+            f.Page(PopupPage.Folia);f.Activate(f.Find("Folia 任务栏样式"));
+            Check(f.Navigation.Page==PopupPage.ChoosePreference&&f.Navigation.PreferenceAction==811,"Folia taskbar style opens its chooser");
+            f.Activate(f.Find("紧凑开关（方案 A）"));
+            Check(DeviceSettings.Current.FoliaTaskbarMode=="compact"&&f.Navigation.Page==PopupPage.Folia,"choosing Scheme A updates FoliaTaskbarMode and returns");
+            f.Activate(f.Find("Folia 任务栏样式"));f.Activate(f.Find("常驻控制（方案 B）"));
+            Check(DeviceSettings.Current.FoliaTaskbarMode=="controls","choosing Scheme B updates FoliaTaskbarMode");
             f.Page(PopupPage.Preferences);
             Check(!f.Find("合成语音提醒").Enabled,"voice cannot be selected before low battery reminders are enabled");
             f.Activate(f.Find("低电量提醒"));
@@ -155,7 +161,7 @@ static class UiMenusTests {
                     using(var bmp=new Bitmap(mainSize.Width,mainSize.Height))using(var g=Graphics.FromImage(bmp))CompactRenderer.Paint(g,f.Owner.Current,null,null,false,f.Owner.Dpi,null,false,false,f.Owner.Headset,f.Owner.Audio);
                     var wirelessLayout=WirelessLayout.Build(f.Owner,0,1000);
                     using(var bmp=new Bitmap(wirelessLayout.Size.Width,wirelessLayout.Size.Height))using(var g=Graphics.FromImage(bmp))CompactRenderer.PaintWireless(g,f.Owner,wirelessLayout,false,new PanelFeedback());
-                    foreach(PopupPage page in Enum.GetValues(typeof(PopupPage)))if(page!=PopupPage.Main){
+                    foreach(PopupPage page in Enum.GetValues(typeof(PopupPage)))if(page!=PopupPage.Main&&page!=PopupPage.Folia&&page!=PopupPage.FoliaQueue&&page!=PopupPage.FoliaPlaylists){
                         var nav=new PopupNavigation {Page=page,PreferenceAction=228,SelectedDeviceKey="w-mouse",SelectedDeviceName="无线鼠标",VisibleChoices=7,MaximumHeight=360};
                         var pageRows=PopupPages.Build(f.Owner,nav,true);var sz=PopupPages.SizeFor(pageRows);
                         Check(sz.Width==VisualDesign.PanelWidth&&sz.Height<=360,"page "+page+" fits within 360px work area in "+fontMode+" mode (actual "+sz+")");
@@ -241,7 +247,7 @@ static class UiMenusTests {
     }
     static void OpeningLifecycle(){
         Check(typeof(Details).GetField("batteryProgress",Private)!=null,"popup owns independent UI-only fill progress");
-        int timers=0;foreach(var field in typeof(Details).GetFields(Private))if(field.FieldType==typeof(System.Windows.Forms.Timer))timers++;Check(timers==6,"opening fill adds no resident timer");
+        int timers=0;foreach(var field in typeof(Details).GetFields(Private))if(field.FieldType==typeof(System.Windows.Forms.Timer))timers++;Check(timers==7,"opening fill adds no resident timer");
         foreach(string layout in PanelLayouts.Keys)using(var f=new Fixture()){
             var pref=DeviceSettings.Current;pref.PanelLayout=layout;pref.ReducedMotion=false;DeviceSettings.UseTransientConfiguration(pref);
             Call(f.Popup,"BeginBatteryOpening");Call(f.Popup,"AnimateTo",1f,190f);var timer=(System.Windows.Forms.Timer)Field(f.Popup,"animation");var clock=(Stopwatch)Field(f.Popup,"motionClock");

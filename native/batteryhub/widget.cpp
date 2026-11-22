@@ -4,9 +4,11 @@
 #include "reserve.h"
 
 #include <commctrl.h>
+#include <windowsx.h>
 #include <uiautomation.h>
 #include <algorithm>
 #include <climits>
+#include <cmath>
 
 namespace {
 
@@ -14,11 +16,34 @@ HWND g_wnd, g_taskbar, g_tip, g_notify, g_rebar;
 bool g_xaml;  // Windows 11 XAML taskbar: the task buttons end early through reserve::Update
 UINT g_clickMsg;
 bool g_light, g_hover;
+int g_hoverFoliaId = 0;
+bool g_hoverDevice = false;
 COLORREF g_badge = CLR_INVALID;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
 bool g_stacked;     // icon above the percentage (menu option, PR #525)
 bool g_vertical;    // the primary taskbar is docked left or right: one block per device, stacked (PR #321)
 std::vector<WidgetItem> g_items;
+FoliaWidgetState g_folia;
+struct FoliaHit { int id; RECT rc; };
+std::vector<FoliaHit> g_foliaHits;
+RECT g_deviceZone{};
+HWND g_pressedWnd = nullptr;
+int g_pressedKind = -1;
+constexpr UINT_PTR kAnimTimerId = 1;
+constexpr UINT kAnimIntervalMs = 16;
+constexpr ULONGLONG kStateAnimMs = 220;
+constexpr ULONGLONG kNudgeAnimMs = 180;
+struct FoliaAnimState {
+    bool playActive = false;
+    bool playFrom = false;
+    ULONGLONG playStart = 0;
+    bool loopActive = false;
+    int loopFrom = 0;
+    ULONGLONG loopStart = 0;
+    int nudgeId = 0;
+    ULONGLONG nudgeStart = 0;
+} g_anim;
+bool g_animTimerOn = false;
 std::wstring g_tipText;
 RECT g_lastTray{}, g_lastBar{}, g_lastWidgets{};
 int g_lastW = -1, g_lastDpi = 0, g_lastLeft = -1;
@@ -31,9 +56,13 @@ HINSTANCE g_inst;
 struct Mirror {
     HWND bar = nullptr, wnd = nullptr;
     bool hover = false;
+    int hoverFoliaId = 0;
+    bool hoverDevice = false;
     SIZE size{};
     int dpi = 0;
     int lastLeft = INT_MIN;  // client x it was last placed at; INT_MIN = not placed (hidden)
+    std::vector<FoliaHit> foliaHits;
+    RECT deviceZone{};
 };
 std::vector<Mirror> g_mirrors;
 // Which taskbars show the strip: "all", "main", or one monitor's id (MonitorId), e.g. only monitor 3.
@@ -325,7 +354,69 @@ Mask RenderMask(const std::wstring& s, HFONT font, bool darkOnLight) {
     return m;
 }
 
+Mask ThickenMask(const Mask& src) {
+    if (src.w <= 0 || src.h <= 0) return src;
+    Mask out;
+    out.w = src.w + 1;
+    out.h = src.h + 1;
+    out.a.resize((size_t)out.w * out.h, 0);
+    auto at = [&](int x, int y) -> int {
+        if (x < 0 || y < 0 || x >= src.w || y >= src.h) return 0;
+        return src.a[(size_t)y * src.w + x];
+    };
+    for (int y = 0; y < out.h; y++) {
+        for (int x = 0; x < out.w; x++) {
+            int v = std::max(at(x, y), std::max(at(x - 1, y), at(x, y - 1)) * 20 / 100);
+            out.a[(size_t)y * out.w + x] = static_cast<BYTE>(std::min(255, v));
+        }
+    }
+    return out;
+}
+
 struct Rgb { int r, g, b; };
+
+float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+
+float EaseOutCubic(float t) {
+    float inv = 1.0f - Clamp01(t);
+    return 1.0f - inv * inv * inv;
+}
+
+float EaseOutBack(float t) {
+    float x = Clamp01(t) - 1.0f;
+    return 1.0f + 2.70158f * x * x * x + 1.70158f * x * x;
+}
+
+Rgb LerpRgb(Rgb a, Rgb b, float t) {
+    float u = Clamp01(t);
+    return {
+        static_cast<int>(a.r + (b.r - a.r) * u + 0.5f),
+        static_cast<int>(a.g + (b.g - a.g) * u + 0.5f),
+        static_cast<int>(a.b + (b.b - a.b) * u + 0.5f)
+    };
+}
+
+float AnimProgress(bool active, ULONGLONG start, ULONGLONG dur, ULONGLONG now) {
+    if (!active) return 1.0f;
+    if (now <= start) return 0.0f;
+    ULONGLONG elapsed = now - start;
+    if (elapsed >= dur) return 1.0f;
+    return static_cast<float>(elapsed) / static_cast<float>(dur);
+}
+
+void SyncAnimTimer(ULONGLONG now) {
+    if (g_anim.playActive && now - g_anim.playStart >= kStateAnimMs) g_anim.playActive = false;
+    if (g_anim.loopActive && now - g_anim.loopStart >= kStateAnimMs) g_anim.loopActive = false;
+    if (g_anim.nudgeId > 0 && now - g_anim.nudgeStart >= kNudgeAnimMs) g_anim.nudgeId = 0;
+    bool need = g_anim.playActive || g_anim.loopActive || g_anim.nudgeId > 0;
+    if (need && g_wnd && !g_animTimerOn) {
+        SetTimer(g_wnd, kAnimTimerId, kAnimIntervalMs, nullptr);
+        g_animTimerOn = true;
+    } else if (!need && g_animTimerOn) {
+        if (g_wnd) KillTimer(g_wnd, kAnimTimerId);
+        g_animTimerOn = false;
+    }
+}
 
 struct Canvas {
     int w, h;
@@ -345,6 +436,38 @@ struct Canvas {
     void Draw(const Mask& m, int x, int y, Rgb c, int alpha) {
         for (int j = 0; j < m.h; j++)
             for (int i = 0; i < m.w; i++) Blend(x + i, y + j, c, m.a[j * m.w + i] * alpha / 255);
+    }
+    void DrawScaled(const Mask& m, float cx, float cy, float scale, Rgb c, int alpha) {
+        if (m.w <= 0 || m.h <= 0 || scale <= 0.01f || alpha <= 0) return;
+        float halfW = m.w * scale * 0.5f;
+        float halfH = m.h * scale * 0.5f;
+        int x0 = std::max(0, static_cast<int>(std::floor(cx - halfW)) - 1);
+        int y0 = std::max(0, static_cast<int>(std::floor(cy - halfH)) - 1);
+        int x1 = std::min(w - 1, static_cast<int>(std::ceil(cx + halfW)) + 1);
+        int y1 = std::min(h - 1, static_cast<int>(std::ceil(cy + halfH)) + 1);
+        float invScale = 1.0f / scale;
+        auto sample = [&](int x, int y) -> float {
+            if (x < 0 || y < 0 || x >= m.w || y >= m.h) return 0.0f;
+            return static_cast<float>(m.a[(size_t)y * m.w + x]);
+        };
+        for (int py = y0; py <= y1; py++) {
+            float sy = (py + 0.5f - cy) * invScale + m.h * 0.5f - 0.5f;
+            int iy = static_cast<int>(std::floor(sy));
+            float fy = sy - iy;
+            for (int px = x0; px <= x1; px++) {
+                float sx = (px + 0.5f - cx) * invScale + m.w * 0.5f - 0.5f;
+                int ix = static_cast<int>(std::floor(sx));
+                float fx = sx - ix;
+                float v00 = sample(ix, iy);
+                float v10 = sample(ix + 1, iy);
+                float v01 = sample(ix, iy + 1);
+                float v11 = sample(ix + 1, iy + 1);
+                float cov = (v00 * (1.0f - fx) + v10 * fx) * (1.0f - fy) +
+                            (v01 * (1.0f - fx) + v11 * fx) * fy;
+                int a = static_cast<int>(cov * alpha / 255.0f + 0.5f);
+                if (a > 0) Blend(px, py, c, std::min(255, a));
+            }
+        }
     }
 };
 
@@ -388,10 +511,19 @@ struct Piece {
     int anchor = -1;
     int bx = 0, by = 0;
     int barPct = -1;  // >= 0: thin level bar under the text (branded devices)
+    int barAlpha = 255;
+    float yLift = 0.0f;
     Rgb barColor{};
     Mask halo;        // glow drawn behind the glyph (branded devices)
     int haloR = 0, haloAlpha = 0;
     int px = INT_MIN, py = 0;  // fixed top-left position (stacked and vertical layouts); INT_MIN = flow left to right
+    int foliaId = 0;
+    int slotW = 0;
+    Mask oldM;
+    Rgb oldColor{};
+    int oldAlpha = 0;
+    int animKind = 0;  // 1: play/pause morph, 2: loop morph
+    float animT = 1.0f;
 };
 
 // Three arrangements of the same pieces:
@@ -413,7 +545,91 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     std::vector<Piece> out;
     struct Slot { int icon, label, bolt; };  // indices of one device's pieces
     std::vector<Slot> slots;
-    if (g_items.empty()) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons, g_light), fg, 110, 0 });
+    if (!g_vertical && g_folia.mode > 0) {
+        const wchar_t kMusicNote = 0xE8D6;
+        const wchar_t kPrev = 0xE892;
+        const wchar_t kPlay = 0xE768;
+        const wchar_t kPause = 0xE769;
+        ULONGLONG now = GetTickCount64();
+        float playT = AnimProgress(g_anim.playActive, g_anim.playStart, kStateAnimMs, now);
+        float loopT = AnimProgress(g_anim.loopActive, g_anim.loopStart, kStateAnimMs, now);
+        float playEase = EaseOutCubic(playT);
+        int tailGap = g_items.empty() ? 0 : Px(16);
+        if (g_folia.mode == 1) {
+            float barFactor = g_anim.playActive ? (g_folia.playing ? playEase : (1.0f - playEase)) : (g_folia.playing ? 1.0f : 0.0f);
+            Rgb noteColor = g_anim.playActive ? LerpRgb(g_anim.playFrom ? charge : fg, g_folia.playing ? charge : fg, playEase) : (g_folia.playing ? charge : fg);
+            Piece p{ RenderMask(std::wstring(1, kMusicNote), icons, g_light), noteColor, 255, tailGap };
+            p.foliaId = 5;
+            if (g_anim.playActive) {
+                p.barPct = static_cast<int>(100.0f * barFactor + 0.5f);
+                p.barAlpha = static_cast<int>(255.0f * barFactor + 0.5f);
+                p.yLift = barFactor;
+                p.barColor = charge;
+            } else if (g_folia.playing) {
+                p.barPct = 100;
+                p.barAlpha = 255;
+                p.yLift = 1.0f;
+                p.barColor = charge;
+            }
+            out.push_back(std::move(p));
+        } else if (g_folia.mode == 2) {
+            const wchar_t kNext = 0xE893;
+            const wchar_t kRepeatAll = 0xE8EE;
+            const wchar_t kRepeatOne = 0xE8ED;
+            Piece prevP{ RenderMask(std::wstring(1, kPrev), icons, g_light), fg, 235, Px(14) };
+            prevP.foliaId = 1;
+            out.push_back(std::move(prevP));
+            Rgb playColor = g_anim.playActive ? LerpRgb(g_anim.playFrom ? charge : fg, g_folia.playing ? charge : fg, playEase) : (g_folia.playing ? charge : fg);
+            Piece playP{ RenderMask(std::wstring(1, g_folia.playing ? kPause : kPlay), icons, g_light), playColor, 255, Px(14) };
+            playP.foliaId = 2;
+            Mask altPlayM = RenderMask(std::wstring(1, g_folia.playing ? kPlay : kPause), icons, g_light);
+            playP.slotW = std::max(playP.m.w, altPlayM.w);
+            if (g_anim.playActive && playT < 1.0f) {
+                playP.oldM = (g_anim.playFrom != g_folia.playing) ? std::move(altPlayM) : RenderMask(std::wstring(1, g_anim.playFrom ? kPause : kPlay), icons, g_light);
+                playP.oldColor = g_anim.playFrom ? charge : fg;
+                playP.oldAlpha = 255;
+                playP.animKind = 1;
+                playP.animT = playT;
+            }
+            out.push_back(std::move(playP));
+            Piece nextP{ RenderMask(std::wstring(1, kNext), icons, g_light), fg, 235, Px(18) };
+            nextP.foliaId = 3;
+            out.push_back(std::move(nextP));
+            float barFactor = g_anim.playActive ? (g_folia.playing ? playEase : (1.0f - playEase)) : (g_folia.playing ? 1.0f : 0.0f);
+            Rgb menuColor = g_anim.playActive ? LerpRgb(g_anim.playFrom ? charge : fg, g_folia.playing ? charge : fg, playEase) : (g_folia.playing ? charge : fg);
+            Piece menuP{ RenderMask(std::wstring(1, kMusicNote), icons, g_light), menuColor, 255, Px(14) };
+            menuP.foliaId = 4;
+            if (g_anim.playActive) {
+                menuP.barPct = static_cast<int>(100.0f * barFactor + 0.5f);
+                menuP.barAlpha = static_cast<int>(255.0f * barFactor + 0.5f);
+                menuP.yLift = barFactor;
+                menuP.barColor = charge;
+            } else if (g_folia.playing) {
+                menuP.barPct = 100;
+                menuP.barAlpha = 255;
+                menuP.yLift = 1.0f;
+                menuP.barColor = charge;
+            }
+            out.push_back(std::move(menuP));
+            wchar_t loopGlyph = g_folia.loopMode == 2 ? kRepeatOne : kRepeatAll;
+            Rgb loopColor = g_folia.loopMode > 0 ? charge : fg;
+            int loopAlpha = g_folia.loopMode > 0 ? 255 : 235;
+            Piece loopP{ ThickenMask(RenderMask(std::wstring(1, loopGlyph), icons, g_light)), loopColor, loopAlpha, tailGap };
+            loopP.foliaId = 6;
+            Mask altLoopM = ThickenMask(RenderMask(std::wstring(1, g_folia.loopMode == 2 ? kRepeatAll : kRepeatOne), icons, g_light));
+            loopP.slotW = std::max(loopP.m.w, altLoopM.w);
+            if (g_anim.loopActive && loopT < 1.0f) {
+                wchar_t oldLoopGlyph = g_anim.loopFrom == 2 ? kRepeatOne : kRepeatAll;
+                loopP.oldM = (oldLoopGlyph != loopGlyph) ? std::move(altLoopM) : ThickenMask(RenderMask(std::wstring(1, oldLoopGlyph), icons, g_light));
+                loopP.oldColor = g_anim.loopFrom > 0 ? charge : fg;
+                loopP.oldAlpha = g_anim.loopFrom > 0 ? 255 : 235;
+                loopP.animKind = 2;
+                loopP.animT = loopT;
+            }
+            out.push_back(std::move(loopP));
+        }
+    }
+    if (g_items.empty() && g_folia.mode == 0) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons, g_light), fg, 110, 0 });
     for (size_t i = 0; i < g_items.size(); i++) {
         const auto& it = g_items[i];
         int a = it.dim ? 120 : 255;
@@ -517,58 +733,108 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     }
     width = Px(8) * 2;
     for (auto& p : out)
-        if (p.anchor < 0) width += p.m.w + p.gapAfter;
+        if (p.anchor < 0) width += std::max(p.m.w, p.slotW) + p.gapAfter;
     return out;
 }
 
 // Draws the strip for one window: the primary one or a mirror on a secondary taskbar.
-void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
+void PaintStrip(HWND wnd, HWND taskbar, bool hover, int hoverFoliaId, bool hoverDevice, std::vector<FoliaHit>& foliaHits, RECT& deviceZone, SIZE& size) {
     RECT bar;
     GetClientRect(taskbar, &bar);
     int W = 0, H = 0;
     auto pieces = Layout(bar.right - bar.left, bar.bottom - bar.top, W, H);
+    foliaHits.clear();
+    deviceZone = RECT{};
     if (W <= 0 || H <= 0) return;
     Canvas cv(W, H);
 
     // Nearly transparent background so the whole strip receives mouse input,
     // plus a rounded hover highlight like the system tray icons have.
     for (auto& p : cv.px) p = 0x01000000;
-    auto roundRect = [&](int inset, int r, Rgb c, int a) {
-        for (int y = inset; y < H - inset; y++)
-            for (int x = 0; x < W; x++) {
-                int dx = x < r ? r - x : (x >= W - r ? x - (W - r - 1) : 0);
-                int dy = y < inset + r ? inset + r - y : (y >= H - inset - r ? y - (H - inset - r - 1) : 0);
+    auto roundRectBox = [&](int left, int top, int right, int bottom, int r, Rgb c, int a) {
+        int cl = std::max(0, left), ct = std::max(0, top), cr = std::min(W, right), cb = std::min(H, bottom);
+        for (int y = ct; y < cb; y++)
+            for (int x = cl; x < cr; x++) {
+                int dx = x < cl + r ? (cl + r) - x : (x >= cr - r ? x - (cr - r - 1) : 0);
+                int dy = y < ct + r ? (ct + r) - y : (y >= cb - r ? y - (cb - r - 1) : 0);
                 if (dx * dx + dy * dy <= r * r) cv.Blend(x, y, c, a);
             }
     };
-    // Optional plate in the taskbar's own colours: keeps the text readable when a taskbar theme
-    // (e.g. Windhawk's Taskbar Styler) makes the bar transparent over the wallpaper.
-    Rgb barColor = g_light ? Rgb{ 243, 243, 243 } : Rgb{ 32, 32, 32 };
-    if (g_background) roundRect(Px(4), Px(6), barColor, 240);
-    if (hover) roundRect(Px(4), Px(4), g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }, g_light ? 20 : 26);
-
     int x = Px(8);
+    Rgb barColor = g_light ? Rgb{ 243, 243, 243 } : Rgb{ 32, 32, 32 };
     Rgb track = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
     std::vector<int> xs(pieces.size()), ys(pieces.size());
+    std::vector<int> slotXs(pieces.size()), slotWs(pieces.size());
+    std::vector<size_t> foliaIndices;
+    int firstDevIdx = -1;
+    int bh = std::max(2, Px(2)), barGap = Px(3);
     for (size_t i = 0; i < pieces.size(); i++) {
         const Piece& p = pieces[i];
         if (p.anchor < 0) {
             bool fixed = p.px != INT_MIN;  // stacked / vertical layout: Layout() placed it
-            xs[i] = fixed ? p.px : x;
+            int pw = std::max(p.m.w, p.slotW);
+            slotXs[i] = fixed ? p.px : x;
+            slotWs[i] = pw;
+            xs[i] = fixed ? p.px : (x + (pw - p.m.w) / 2);
             ys[i] = fixed ? p.py : (H - p.m.h) / 2;
+            if (!fixed && (p.yLift > 0.0f || p.barPct >= 0)) {
+                float lift = p.yLift > 0.0f ? p.yLift : (p.barPct >= 0 ? 1.0f : 0.0f);
+                float baseY = static_cast<float>(H - p.m.h) * 0.5f;
+                float liftedY = static_cast<float>(H - (p.m.h + barGap + bh)) * 0.5f;
+                ys[i] = static_cast<int>(std::round(baseY + (liftedY - baseY) * lift));
+            }
+            if (p.foliaId > 0) foliaIndices.push_back(i);
+            else if (firstDevIdx < 0) firstDevIdx = static_cast<int>(i);
+            if (!fixed) x += pw + p.gapAfter;
+        }
+    }
+    for (size_t k = 0; k < foliaIndices.size(); k++) {
+        size_t idx = foliaIndices[k];
+        int left = (k == 0) ? 0 : (slotXs[foliaIndices[k - 1]] + slotWs[foliaIndices[k - 1]] + slotXs[idx]) / 2;
+        int right = W;
+        if (k + 1 < foliaIndices.size()) {
+            size_t nextIdx = foliaIndices[k + 1];
+            right = (slotXs[idx] + slotWs[idx] + slotXs[nextIdx]) / 2;
+        } else if (firstDevIdx >= 0) {
+            right = (slotXs[idx] + slotWs[idx] + slotXs[firstDevIdx]) / 2;
+        }
+        foliaHits.push_back({ pieces[idx].foliaId, RECT{ left, 0, right, H } });
+    }
+    int foliaEndX = foliaHits.empty() ? 0 : foliaHits.back().rc.right;
+    if (firstDevIdx >= 0) {
+        deviceZone = RECT{ foliaEndX, 0, W, H };
+    }
+    // Optional plate in the taskbar's own colours: keeps the text readable when a taskbar theme
+    // (e.g. Windhawk's Taskbar Styler) makes the bar transparent over the wallpaper.
+    if (g_background) {
+        if (!foliaHits.empty()) roundRectBox(0, Px(4), foliaEndX - (deviceZone.right > deviceZone.left ? Px(2) : 0), H - Px(4), Px(6), barColor, 240);
+        if (deviceZone.right > deviceZone.left) roundRectBox(deviceZone.left + (foliaHits.empty() ? 0 : Px(2)), Px(4), W, H - Px(4), Px(6), barColor, 240);
+    }
+    if (hover && hoverDevice && deviceZone.right > deviceZone.left) {
+        int dLeft = foliaHits.empty() ? 0 : deviceZone.left + Px(2);
+        roundRectBox(dLeft, Px(4), W, H - Px(4), Px(4), g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }, g_light ? 20 : 26);
+    }
+    for (size_t idx : foliaIndices) {
+        const Piece& p = pieces[idx];
+        if (hover && hoverFoliaId == p.foliaId) {
+            int padX = Px(4);
+            roundRectBox(slotXs[idx] - padX, Px(4), slotXs[idx] + slotWs[idx] + padX, H - Px(4), Px(4), g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }, g_light ? 24 : 30);
+        }
+    }
+    for (size_t i = 0; i < pieces.size(); i++) {
+        const Piece& p = pieces[i];
+        if (p.anchor < 0) {
             if (p.haloR) cv.Draw(p.halo, xs[i] - p.haloR, ys[i] - p.haloR, p.color, p.haloAlpha * p.alpha / 255);
-            if (p.barPct >= 0) {
+            if (p.barPct >= 0 && p.barAlpha > 0) {
                 // The bar spans the text's width, like Synapse's battery bar; in the row layout text and bar
                 // are centred together.
-                int bh = std::max(2, Px(2)), gap = Px(3);
-                if (!fixed) ys[i] = (H - (p.m.h + gap + bh)) / 2;
-                int by = ys[i] + p.m.h + gap;
+                int by = ys[i] + p.m.h + barGap;
                 int fill = std::max(p.barPct > 0 ? 1 : 0, (p.barPct * p.m.w + 50) / 100);
+                int ba = p.barAlpha * p.alpha / 255;
                 for (int yy = by; yy < by + bh; yy++)
                     for (int xx = 0; xx < p.m.w; xx++)
-                        cv.Blend(xs[i] + xx, yy, xx < fill ? p.barColor : track, xx < fill ? p.alpha : 45 * p.alpha / 255);
+                        cv.Blend(xs[i] + xx, yy, xx < fill ? p.barColor : track, xx < fill ? ba : 45 * ba / 255);
             }
-            if (!fixed) x += p.m.w + p.gapAfter;
         } else {  // caption: one-pixel outline in the taskbar's colour so it reads over the icon's lines
             xs[i] = xs[p.anchor] + p.bx;
             ys[i] = ys[p.anchor] + p.by;
@@ -576,7 +842,46 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
                 for (int ox = -1; ox <= 1; ox++)
                     if (ox || oy) cv.Draw(p.m, xs[i] + ox, ys[i] + oy, barColor, 255);
         }
-        cv.Draw(p.m, xs[i], ys[i], p.color, p.alpha);
+        bool isPressed = (p.foliaId > 0 && g_pressedWnd == wnd && g_pressedKind == p.foliaId);
+        bool isNudging = (p.foliaId > 0 && g_anim.nudgeId == p.foliaId);
+        bool isLifting = (p.px == INT_MIN && p.yLift > 0.0f && p.yLift < 1.0f);
+        if (p.animKind > 0 && p.animT < 1.0f) {
+            float e = EaseOutCubic(p.animT);
+            float pop = EaseOutBack(p.animT);
+            float pressScale = isPressed ? 0.88f : 1.0f;
+            float cx = xs[i] + p.m.w * 0.5f;
+            float cy = ys[i] + p.m.h * 0.5f;
+            float slide = static_cast<float>(Px(3)) * (p.animKind == 1 ? 1.0f : 0.7f);
+            int oldA = static_cast<int>(p.oldAlpha * (1.0f - e) + 0.5f);
+            if (oldA > 0 && p.oldM.w > 0) {
+                float oldScale = (1.0f - 0.28f * e) * pressScale;
+                cv.DrawScaled(p.oldM, cx, cy - slide * e, oldScale, p.oldColor, oldA);
+            }
+            int newA = static_cast<int>(p.alpha * e + 0.5f);
+            if (newA > 0) {
+                float newScale = (0.72f + 0.28f * pop) * pressScale;
+                cv.DrawScaled(p.m, cx, cy + slide * (1.0f - e), newScale, p.color, newA);
+            }
+        } else if (isPressed || isNudging || isLifting) {
+            float cx = xs[i] + p.m.w * 0.5f;
+            float cy = ys[i] + p.m.h * 0.5f;
+            if (isLifting) {
+                float baseY = static_cast<float>(H - p.m.h) * 0.5f;
+                float liftedY = static_cast<float>(H - (p.m.h + barGap + bh)) * 0.5f;
+                cy = baseY + (liftedY - baseY) * p.yLift + p.m.h * 0.5f;
+            }
+            float scale = isPressed ? 0.88f : 1.0f;
+            if (isNudging) {
+                float nt = AnimProgress(true, g_anim.nudgeStart, kNudgeAnimMs, GetTickCount64());
+                float pulse = std::sin(Clamp01(nt) * 3.14159265f);
+                if (p.foliaId == 1) cx -= static_cast<float>(Px(2)) * pulse;
+                else if (p.foliaId == 3) cx += static_cast<float>(Px(2)) * pulse;
+                else scale *= (1.0f + 0.14f * pulse);
+            }
+            cv.DrawScaled(p.m, cx, cy, scale, p.color, p.alpha);
+        } else {
+            cv.Draw(p.m, xs[i], ys[i], p.color, p.alpha);
+        }
     }
     if (g_badge != CLR_INVALID) {
         Rgb badge{ GetRValue(g_badge), GetGValue(g_badge), GetBValue(g_badge) };
@@ -614,14 +919,14 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
 
 void Paint() {
     if (!g_wnd) return;
-    PaintStrip(g_wnd, g_taskbar, g_hover, g_size);
+    PaintStrip(g_wnd, g_taskbar, g_hover, g_hoverFoliaId, g_hoverDevice, g_foliaHits, g_deviceZone, g_size);
     g_lastW = -1;  // force a re-position with the new size
 }
 
 void PaintMirror(Mirror& m) {
     g_dpiBar = m.bar;
     m.dpi = Dpi();
-    PaintStrip(m.wnd, m.bar, m.hover, m.size);
+    PaintStrip(m.wnd, m.bar, m.hover, m.hoverFoliaId, m.hoverDevice, m.foliaHits, m.deviceZone, m.size);
     g_dpiBar = nullptr;
     m.lastLeft = INT_MIN;  // force a re-position with the new size
 }
@@ -815,25 +1120,88 @@ void SyncMirrors() {
 }
 
 void PaintAll() {
+    SyncAnimTimer(GetTickCount64());
     Paint();
     for (auto& m : g_mirrors) PaintMirror(m);
 }
 
 // Hover highlight for the strip under the mouse: the primary one or a mirror.
-void SetHover(HWND h, bool on) {
+std::wstring ActiveTipText(HWND h) {
+    int foliaId = 0;
+    if (h == g_wnd) foliaId = g_hover ? g_hoverFoliaId : 0;
+    else {
+        for (const auto& m : g_mirrors) if (m.wnd == h) { foliaId = m.hover ? m.hoverFoliaId : 0; break; }
+    }
+    if (foliaId == 1) return g_folia.title.empty() ? L"切换上一首歌" : (L"切换上一首歌：" + g_folia.title);
+    if (foliaId == 2) return g_folia.playing ? L"暂停" : L"播放";
+    if (foliaId == 3) return g_folia.title.empty() ? L"切换下一首歌" : (L"切换下一首歌：" + g_folia.title);
+    if (foliaId == 4 || foliaId == 5) return L"音乐设置";
+    if (foliaId == 6) return g_folia.loopMode == 1 ? L"播放模式：列表循环" : (g_folia.loopMode == 2 ? L"播放模式：单曲循环" : L"播放模式：顺序播放");
+    return g_tipText;
+}
+
+void UpdateTipTextFor(HWND h) {
+    if (!g_tip || !h) return;
+    std::wstring text = ActiveTipText(h);
+    TTTOOLINFOW ti{ sizeof(ti) };
+    ti.hwnd = g_notify;
+    ti.uId = (UINT_PTR)h;
+    ti.lpszText = const_cast<wchar_t*>(text.c_str());
+    SendMessageW(g_tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+}
+
+void UpdateAllTips() {
+    if (!g_tip) return;
+    if (g_wnd) UpdateTipTextFor(g_wnd);
+    for (const auto& m : g_mirrors) if (m.wnd) UpdateTipTextFor(m.wnd);
+}
+
+void SetHover(HWND h, bool on, int foliaId = 0, bool dev = false) {
     if (h == g_wnd) {
-        if (g_hover == on) return;
+        int nextId = on ? foliaId : 0;
+        bool nextDev = on && dev && nextId == 0;
+        if (g_hover == on && g_hoverFoliaId == nextId && g_hoverDevice == nextDev) return;
+        bool tipChanged = (g_hoverFoliaId != nextId) || (g_hover != on);
         g_hover = on;
+        g_hoverFoliaId = nextId;
+        g_hoverDevice = nextDev;
+        if (tipChanged) UpdateTipTextFor(h);
         Paint();
         widget::Reposition();
         return;
     }
-    for (auto& m : g_mirrors)
-        if (m.wnd == h && m.hover != on) {
+    for (auto& m : g_mirrors) {
+        int nextId = on ? foliaId : 0;
+        bool nextDev = on && dev && nextId == 0;
+        if (m.wnd == h && (m.hover != on || m.hoverFoliaId != nextId || m.hoverDevice != nextDev)) {
+            bool tipChanged = (m.hoverFoliaId != nextId) || (m.hover != on);
             m.hover = on;
+            m.hoverFoliaId = nextId;
+            m.hoverDevice = nextDev;
+            if (tipChanged) UpdateTipTextFor(h);
             PaintMirror(m);
             PositionMirror(m);
         }
+    }
+}
+
+int HitFoliaAt(HWND h, POINT pt) {
+    const std::vector<FoliaHit>* hits = nullptr;
+    if (h == g_wnd) hits = &g_foliaHits;
+    else {
+        for (const auto& m : g_mirrors) if (m.wnd == h) { hits = &m.foliaHits; break; }
+    }
+    if (!hits) return 0;
+    for (const auto& hit : *hits) {
+        if (PtInRect(&hit.rc, pt)) return hit.id;
+    }
+    return 0;
+}
+
+bool HitDeviceAt(HWND h, POINT pt) {
+    if (h == g_wnd) return PtInRect(&g_deviceZone, pt) != 0;
+    for (const auto& m : g_mirrors) if (m.wnd == h) return PtInRect(&m.deviceZone, pt) != 0;
+    return false;
 }
 
 LRESULT CALLBACK WidgetProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
@@ -841,19 +1209,85 @@ LRESULT CALLBACK WidgetProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_MOUSEMOVE: {
             TRACKMOUSEEVENT t{ sizeof(t), TME_LEAVE, h, 0 };
             TrackMouseEvent(&t);
-            SetHover(h, true);
+            POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            int foliaId = HitFoliaAt(h, pt);
+            bool dev = (foliaId == 0) && HitDeviceAt(h, pt);
+            SetHover(h, true, foliaId, dev);
             return 0;
         }
         case WM_MOUSELEAVE:
-            SetHover(h, false);
+            SetHover(h, false, 0, false);
+            if (g_pressedWnd == h && g_pressedKind > 0) {
+                g_pressedWnd = nullptr;
+                g_pressedKind = -1;
+                PaintAll();
+            }
             return 0;
-        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDOWN: {
+            POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            int foliaId = HitFoliaAt(h, pt);
+            g_pressedWnd = h;
+            if (foliaId > 0) {
+                g_pressedKind = foliaId;
+                PaintAll();
+                return 0;
+            }
+            if (HitDeviceAt(h, pt)) {
+                g_pressedKind = 0;
+                PostMessageW(g_notify, g_clickMsg, msg, GetMessagePos());
+                return 0;
+            }
+            g_pressedKind = -1;
+            return 0;
+        }
         case WM_LBUTTONUP:
+        {
+            POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            int hitId = HitFoliaAt(h, pt);
+            int downKind = (g_pressedWnd == h) ? g_pressedKind : -1;
+            g_pressedWnd = nullptr;
+            g_pressedKind = -1;
+            if (downKind > 0) {
+                if (hitId == downKind) {
+                    if (hitId == 2) {
+                        g_anim.playActive = true;
+                        g_anim.playFrom = g_folia.playing;
+                        g_anim.playStart = GetTickCount64();
+                        g_folia.playing = !g_folia.playing;
+                        UpdateAllTips();
+                    } else if (hitId == 6) {
+                        g_anim.loopActive = true;
+                        g_anim.loopFrom = g_folia.loopMode;
+                        g_anim.loopStart = GetTickCount64();
+                        g_folia.loopMode = (g_folia.loopMode + 1) % 3;
+                        UpdateAllTips();
+                    } else if (hitId == 1 || hitId == 3 || hitId == 4 || hitId == 5) {
+                        g_anim.nudgeId = hitId;
+                        g_anim.nudgeStart = GetTickCount64();
+                    }
+                    PostMessageW(g_notify, g_clickMsg, static_cast<WPARAM>(0x8000 | hitId), GetMessagePos());
+                }
+                PaintAll();
+                return 0;
+            }
+            if (hitId == 0 && (downKind == 0 || (downKind == -1 && HitDeviceAt(h, pt)))) {
+                PostMessageW(g_notify, g_clickMsg, msg, GetMessagePos());
+            }
+            return 0;
+        }
         case WM_RBUTTONUP:
-            PostMessageW(g_notify, g_clickMsg, msg, GetMessagePos());
+            if (HitFoliaAt(h, POINT{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }) == 0) {
+                PostMessageW(g_notify, g_clickMsg, msg, GetMessagePos());
+            }
             return 0;
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
+        case WM_TIMER:
+            if (wp == kAnimTimerId) {
+                PaintAll();
+                return 0;
+            }
+            break;
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
@@ -932,6 +1366,15 @@ void Destroy() {
     SetMeasureMirrors(false);
     g_primaryHidden = false;  // the next Create() decides again
     if (g_wbWake) WatchWidgetsButton(nullptr);
+    g_foliaHits.clear();
+    g_hoverFoliaId = 0;
+    g_hoverDevice = false;
+    g_deviceZone = RECT{};
+    g_pressedWnd = nullptr;
+    g_pressedKind = -1;
+    if (g_animTimerOn && g_wnd) KillTimer(g_wnd, kAnimTimerId);
+    g_animTimerOn = false;
+    g_anim = FoliaAnimState{};
     if (g_tip) { DestroyWindow(g_tip); g_tip = nullptr; }
     if (g_wnd) { DestroyWindow(g_wnd); g_wnd = nullptr; }
     g_taskbar = nullptr;
@@ -942,17 +1385,9 @@ bool Alive() { return g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskba
 
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip) {
     g_items = items;
-    if (tooltip != g_tipText && g_tip) {
+    if (tooltip != g_tipText) {
         g_tipText = tooltip;
-        TTTOOLINFOW ti{ sizeof(ti) };
-        ti.hwnd = g_notify;
-        ti.lpszText = const_cast<wchar_t*>(g_tipText.c_str());
-        ti.uId = (UINT_PTR)g_wnd;
-        SendMessageW(g_tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
-        for (const auto& m : g_mirrors) {
-            ti.uId = (UINT_PTR)m.wnd;
-            SendMessageW(g_tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
-        }
+        UpdateAllTips();
     }
     PaintAll();
     Reposition();
@@ -962,6 +1397,29 @@ void SetLightTheme(bool light) {
     if (g_light == light) return;
     g_light = light;
     ApplyTipTheme();
+    PaintAll();
+}
+
+void SetFolia(const FoliaWidgetState& folia) {
+    bool visualSame = (g_folia.mode == folia.mode && g_folia.playing == folia.playing && g_folia.liked == folia.liked && g_folia.loopMode == folia.loopMode);
+    if (visualSame && g_folia.title == folia.title) return;
+    FoliaWidgetState prev = g_folia;
+    g_folia = folia;
+    UpdateAllTips();
+    if (visualSame) return;
+    if (prev.mode > 0 && g_folia.mode > 0) {
+        ULONGLONG now = GetTickCount64();
+        if (prev.playing != g_folia.playing) {
+            g_anim.playActive = true;
+            g_anim.playFrom = prev.playing;
+            g_anim.playStart = now;
+        }
+        if (prev.loopMode != g_folia.loopMode) {
+            g_anim.loopActive = true;
+            g_anim.loopFrom = prev.loopMode;
+            g_anim.loopStart = now;
+        }
+    }
     PaintAll();
 }
 
