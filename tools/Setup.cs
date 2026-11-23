@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -44,6 +45,38 @@ static class Setup {
         }
     }
 
+    static string InstalledExecutable() {
+        string data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"MyFinderDeviceBattery");
+        string receipt=Path.Combine(data,"install.json");
+        if(File.Exists(receipt)) {
+            try {
+                UpdatePaths.NoLinks(receipt);
+                var properties=UpdateJson.Read<Dictionary<string,object>>(UpdateJson.ReadBytes(receipt,2097152),true);
+                object value;
+                if(properties.TryGetValue("ExecutablePath",out value)) {
+                    string path=value as string;
+                    if(!string.IsNullOrWhiteSpace(path)&&File.Exists(path))return path;
+                }
+            }catch {}
+        }
+        string fallback=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","MyFinderDeviceBattery","outputs","AtkMouseBattery.exe");
+        return File.Exists(fallback)?fallback:null;
+    }
+
+    static void ShowCompleted(string executable) {
+        using(var form=new Form {Text=Title,ClientSize=new Size(360,136),FormBorderStyle=FormBorderStyle.FixedDialog,StartPosition=FormStartPosition.CenterScreen,MinimizeBox=false,MaximizeBox=false,ShowInTaskbar=false}) {
+            var label=new Label {Text="MyFinder 设备电量 "+Version()+" 已安装完成。",Location=new Point(18,18),AutoSize=true};
+            var launch=new CheckBox {Text="立即运行 MyFinder 设备电量",Location=new Point(18,50),AutoSize=true,Checked=executable!=null,Enabled=executable!=null};
+            var done=new Button {Text="完成",Location=new Point(262,92),Size=new Size(80,28),DialogResult=DialogResult.OK};
+            form.Controls.Add(label);form.Controls.Add(launch);form.Controls.Add(done);
+            form.AcceptButton=done;
+            if(form.ShowDialog()==DialogResult.OK&&launch.Checked&&executable!=null) {
+                try{Process.Start(new ProcessStartInfo(executable) {WorkingDirectory=Path.GetDirectoryName(executable)});}
+                catch(Exception error){MessageBox.Show(form,"安装已完成，但启动失败："+error.Message,Title,MessageBoxButtons.OK,MessageBoxIcon.Warning);}
+            }
+        }
+    }
+
     [STAThread] static int Main(string[] args) {
         if(args.Length>0){
             if(args.Length!=2||args[0]!="--verify-payload")return 2;
@@ -61,7 +94,8 @@ static class Setup {
                     progress.Shown+=async delegate{
                         try{
                             await Task.Run(delegate{WithPayload(null,Install);});result=0;
-                            MessageBox.Show(progress,"安装完成。可从开始菜单打开 MyFinder Device Battery。",Title,MessageBoxButtons.OK,MessageBoxIcon.Information);
+                            progress.Hide();
+                            ShowCompleted(InstalledExecutable());
                         }catch(Exception error){MessageBox.Show(progress,error.Message,Title,MessageBoxButtons.OK,MessageBoxIcon.Error);}
                         finally{progress.Close();}
                     };
