@@ -79,6 +79,7 @@ namespace AtkBatteryTray {
         string updatedNotice;
         readonly System.Windows.Forms.Timer updatedNoticeTimer=new System.Windows.Forms.Timer {Interval=6000};
         float animationProgress;
+        float rawMotionProgress=1f;
         float batteryProgress=1f;
         bool batteryOpening;
         readonly Stopwatch motionClock=new Stopwatch();
@@ -141,6 +142,11 @@ namespace AtkBatteryTray {
         [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW")] static extern IntPtr SetWindowLongPtr(IntPtr hwnd,int index,IntPtr value);
         [DllImport("user32.dll")] static extern int SetWindowCompositionAttribute(IntPtr hwnd,ref WindowCompositionAttribData data);
         [DllImport("dwmapi.dll",PreserveSig=true)] static extern int DwmSetWindowAttribute(IntPtr hwnd,int attribute,ref int value,int size);
+        [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint period);
+        [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint period);
+        bool highResTimerActive;
+        void StartAnimationTimer(){if(!highResTimerActive){try{timeBeginPeriod(1);highResTimerActive=true;}catch{}}animation.Start();}
+        void StopAnimationTimer(){animation.Stop();if(highResTimerActive){highResTimerActive=false;try{timeEndPeriod(1);}catch{}}}
         [StructLayout(LayoutKind.Sequential)] struct WindowCompositionAttribData { public int Attribute; public IntPtr Data; public int SizeOfData; }
         [StructLayout(LayoutKind.Sequential)] struct AccentPolicy { public int AccentState; public int AccentFlags; public uint GradientColor; public int AnimationId; }
         readonly Action<string> copyText,openLink;
@@ -156,7 +162,7 @@ namespace AtkBatteryTray {
             layoutTarget=headsetProgress;
             targetSize=VisualDesign.PanelSizeFor(headsetProgress>0f,owner.Dpi);
             ClientSize=UiState.ScaleSize(targetSize,dpiScale);DoubleBuffered=true;Font=new Font("Segoe UI",9);
-            animation.Interval=16;animation.Tick+=delegate {AdvanceAnimation();};
+            animation.Interval=8;animation.Tick+=delegate {AdvanceAnimation();};
             layoutAnimation.Interval=16;layoutAnimation.Tick+=delegate {AdvanceLayout();};
             feedbackTimer.Interval=285;feedbackTimer.Tick+=delegate {feedbackTimer.Stop();Invalidate();};
             updatedNoticeTimer.Tick+=delegate{updatedNoticeTimer.Stop();updatedNotice=null;Invalidate();};
@@ -367,12 +373,13 @@ namespace AtkBatteryTray {
                     pref.AutoCreateTrayGroups=!pref.AutoCreateTrayGroups;
                     owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
-                if(id==210||id==213||id==216||id==223||id==224||id==228||id==229){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
+                if(id==210||id==213||id==216||id==223||id==224||id==228||id==229||id==235){navigation.PreferenceAction=id;Go(PopupPage.ChoosePreference);return;}
                 if(id==811){navigation.PreferenceAction=811;Go(PopupPage.ChoosePreference);return;}
                 if((id==812||id==813)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==811){pref.FoliaTaskbarMode=id==812?"compact":"controls";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
                 if(id>=470&&id<=472&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==229){
                     pref.PanelLayout=PanelLayouts.Keys[id-470];navigation.DeviceScroll=0;owner.SavePreferences(pref);owner.ConfigurationChanged(false);UpdateLayoutSize();Invalidate();return;
                 }
+                if(id>=480&&id<=484&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==235){pref.MenuAnimation=MenuAnimations.Keys[id-480];owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
                 if((id==460||id==461)&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==228){pref.FontSize=id==461?"large":"normal";owner.SavePreferences(pref);owner.ConfigurationChanged(false);Back();return;}
                 if(id==450&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==224){Back();return;}
                 if(id>=440&&id<=443&&navigation.Page==PopupPage.ChoosePreference&&navigation.PreferenceAction==223) {
@@ -663,14 +670,28 @@ namespace AtkBatteryTray {
         public void OpenAnimated(bool fromLauncher=false) {OpenAnimatedCore(fromLauncher,null);}
         internal void OpenFromTray(Point point,PopupPage page=PopupPage.Main){OpenAnimatedCore(false,null,point,page);}
         internal void OpenUpdated(TrayPanelAnchor placement){OpenAnimatedCore(false,placement);}
+        static float OpenDurationFor(PopupPage page) {
+            string mode=MenuAnimations.Current;
+            if(mode=="fade")return 180f;
+            if(mode=="spring"||mode=="bounce")return 280f;
+            return page==PopupPage.Folia?260f:190f;
+        }
+        static float CloseDurationFor(PopupPage page) {
+            string mode=MenuAnimations.Current;
+            if(mode=="fade")return 135f;
+            if(page==PopupPage.Folia||mode=="spring"||mode=="reveal"||mode=="bounce")return 160f;
+            return 135f;
+        }
         void OpenAnimatedCore(bool fromLauncher,TrayPanelAnchor? placement,Point? click=null,PopupPage page=PopupPage.Main) {
             if(disposingPopup||Disposing||IsDisposed)return;
             presentationDepth++;
             try {
                 BeginPresentation();updatedAnchor=placement;anchor=placement.HasValue?placement.Value.Point:click??owner.CursorPosition();
                 if(!placement.HasValue&&fromLauncher){var screen=PanelWorkArea;anchor=new Point(screen.Right-24,screen.Top+16);}
-                dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage(page);UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;BeginBatteryOpening();
-                frameAlpha=3;PositionForSize(6);Show();Activate();owner.PanelOpened();AnimateTo(1f,190f);
+                dpiScale=NativeDisplay.ScaleAt(anchor);ResetPage(page);UpdateLayoutSize();closing=false;ignoreDeactivate=true;animationProgress=0;rawMotionProgress=0;BeginBatteryOpening();
+                string mode=MenuAnimations.Current;
+                int initialSlide=(page==PopupPage.Folia||mode=="fade"||mode=="reveal"||mode=="spring")?0:(mode=="bounce"?10:6);
+                frameAlpha=3;PositionForSize(initialSlide);Show();Activate();owner.PanelOpened();AnimateTo(1f,OpenDurationFor(page));
             } finally {
                 // Native Show/Activate can pump HandleCreated callbacks before setup finishes.
                 // Keep deactivation guarded until the outermost presentation has returned.
@@ -697,7 +718,8 @@ namespace AtkBatteryTray {
                 if(click.HasValue){updatedAnchor=null;anchor=click.Value;dpiScale=NativeDisplay.ScaleAt(anchor);}
                 ResetPage(page);
                 if(click.HasValue)PositionForSize(0);
-                if(closing){closing=false;BeginBatteryOpening();owner.PanelOpened();AnimateTo(1f,190f);}
+                if(closing){closing=false;BeginBatteryOpening();owner.PanelOpened();AnimateTo(1f,OpenDurationFor(page));}
+                else if(page==PopupPage.Folia){animationProgress=0;rawMotionProgress=0;frameAlpha=3;PositionForSize(0);AnimateTo(1f,OpenDurationFor(page));}
                 Show();Activate();
             } finally {presentationDepth--;if(presentationDepth==0)QueueOpeningGuardRelease(presentationEpoch);}
         }
@@ -727,7 +749,7 @@ namespace AtkBatteryTray {
         }
         public void CloseAnimated() {
             if(disposingPopup||Disposing||IsDisposed)return;
-            CancelPointerInteraction();HidePointerTip();CancelDeferredDeactivation();if(closing)return;closing=true;batteryOpening=false;batteryProgress=1;owner.SetAudioScope(null);owner.PanelClosed();AnimateTo(0f,135f);
+            CancelPointerInteraction();HidePointerTip();CancelDeferredDeactivation();if(closing)return;closing=true;batteryOpening=false;batteryProgress=1;owner.SetAudioScope(null);owner.PanelClosed();AnimateTo(0f,CloseDurationFor(navigation.Page));
         }
         public void ToggleAnimated() {
             if(closing)Reveal();
@@ -736,10 +758,10 @@ namespace AtkBatteryTray {
         void ResetPage(PopupPage page=PopupPage.Main){updatedNotice=null;updatedNoticeTimer.Stop();CancelPointerInteraction();gridControlScroll=0;gridControlKey=null;gridFocusNeedsReveal=false;navigation.Reset();if(page!=PopupPage.Main)navigation.Page=page;SyncAudioScope();keyboardFocus=-1;keyboardFocusKey=null;keyboardFocusVisible=false;hoverAction=-1;hoverStage=-1;hoverAudio=-1;hoverRefresh=false;hoverSettings=false;HidePointerTip();pageAnimation.Stop();pageProgress=1;UpdateLayoutSize();}
         void BeginBatteryOpening(){batteryOpening=!PopupPages.Reduced;batteryProgress=batteryOpening?0:1;}
         void AnimateTo(float target,float durationMs) {
-            if(PopupPages.Reduced){animationProgress=target;batteryOpening=false;batteryProgress=1;frameAlpha=target>0? (byte)255:(byte)0;animation.Stop();motionClock.Stop();if(target==0&&closing){Hide();Dispose();return;}if(!layeredRendering)Opacity=1;Invalidate();return;}
+            if(PopupPages.Reduced){animationProgress=target;rawMotionProgress=target;batteryOpening=false;batteryProgress=1;frameAlpha=target>0? (byte)255:(byte)0;StopAnimationTimer();motionClock.Stop();if(target==0&&closing){Hide();Dispose();return;}if(!layeredRendering)Opacity=1;Invalidate();return;}
             motionStart=animationProgress;motionTarget=target;
             motionDurationMs=Math.Max(60f,durationMs*Math.Abs(target-animationProgress));
-            motionClock.Restart();animation.Start();
+            motionClock.Restart();StartAnimationTimer();
         }
         void AdvanceAnimation() {
             AdvanceMotion((float)motionClock.Elapsed.TotalMilliseconds);
@@ -750,16 +772,30 @@ namespace AtkBatteryTray {
             float progress=reduced?1:Math.Min(1f,elapsedMs/motionDurationMs);
             float eased=1f-(float)Math.Pow(1f-progress,3);
             animationProgress=motionStart+(motionTarget-motionStart)*eased;
+            rawMotionProgress=motionStart+(motionTarget-motionStart)*progress;
             if(batteryOpening){batteryProgress=VisualDesign.BatteryOpeningProgress(elapsedMs,reduced);if(batteryProgress>=1)batteryOpening=false;}
-            if(progress>=1f){animationProgress=motionTarget;if(!batteryOpening){animation.Stop();motionClock.Stop();}}
+            if(progress>=1f){animationProgress=motionTarget;rawMotionProgress=motionTarget;if(!batteryOpening){StopAnimationTimer();motionClock.Stop();}}
             if(animationProgress<=0f&&closing){Hide();Dispose();return;}
-            PositionForSize((int)Math.Round((1-animationProgress)*6));frameAlpha=(byte)Math.Round(3+252*animationProgress);
+            string mode=MenuAnimations.Current;
+            if(navigation.Page!=PopupPage.Folia){
+                if(mode=="bounce"){
+                    float p=closing?animationProgress:rawMotionProgress;
+                    float c1=1.70158f,t1=p-1f;
+                    float back=closing?animationProgress:(1f+(c1+1f)*t1*t1*t1+c1*t1*t1);
+                    PositionForSize((int)Math.Round((1f-back)*10f));
+                }else if(mode=="staggered"){
+                    PositionForSize((int)Math.Round((1-animationProgress)*6));
+                }else{
+                    PositionForSize(0);
+                }
+            }
+            frameAlpha=(byte)Math.Round(3+252*animationProgress);
             if(!layeredRendering)Opacity=.01+.99*animationProgress;
             Invalidate();
         }
         protected override void Dispose(bool disposing) {
             if(disposing&&!disposingPopup)updatedNoticeTimer.Dispose();
-            if(disposing&&!disposingPopup){disposingPopup=true;batteryOpening=false;batteryProgress=1;motionClock.Stop();presentationEpoch++;ignoreDeactivate=true;CancelPointerInteraction();lastHoverTip=null;owner.SetAudioScope(null);CancelDeferredDeactivation();deactivateRelease.Stop();deactivateRelease.Dispose();owner.PanelClosed();animation.Stop();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();feedbackTimer.Stop();feedbackTimer.Dispose();pageAnimation.Stop();pageAnimation.Dispose();controlTip.Dispose();}
+            if(disposing&&!disposingPopup){disposingPopup=true;batteryOpening=false;batteryProgress=1;motionClock.Stop();presentationEpoch++;ignoreDeactivate=true;CancelPointerInteraction();lastHoverTip=null;owner.SetAudioScope(null);CancelDeferredDeactivation();deactivateRelease.Stop();deactivateRelease.Dispose();owner.PanelClosed();StopAnimationTimer();animation.Dispose();layoutAnimation.Stop();layoutAnimation.Dispose();feedbackTimer.Stop();feedbackTimer.Dispose();pageAnimation.Stop();pageAnimation.Dispose();controlTip.Dispose();}
             base.Dispose(disposing);
         }
         protected override void OnPaintBackground(PaintEventArgs e) {if(!layeredRendering)base.OnPaintBackground(e);}
@@ -788,10 +824,38 @@ namespace AtkBatteryTray {
         }
         void PaintContent(Graphics g) {
             var saved=g.Save();
-            if(navigation.Page!=PopupPage.Main){g.TranslateTransform(8*(1-pageProgress),0);PopupPages.Paint(g,owner,navigation,ControlsForPage(),Style.Dark,hoverAction,pressedAction,keyboardFocusVisible?keyboardFocus:-1);}
+            string mode=MenuAnimations.Current;
+            bool canAnimatePage=!PopupPages.Reduced&&animationProgress<1f&&(navigation.Page==PopupPage.Main||navigation.Page==PopupPage.Folia);
+            if(canAnimatePage&&mode=="spring"&&ClientSize.Width>0&&ClientSize.Height>0){
+                using(var snap=new Bitmap(ClientSize.Width,ClientSize.Height,PixelFormat.Format32bppPArgb)){
+                    using(var sg=Graphics.FromImage(snap)){
+                        sg.Clear(Color.Transparent);sg.ScaleTransform(dpiScale,dpiScale);
+                        PaintPageRaw(sg,1f);
+                    }
+                    float p=closing?animationProgress:rawMotionProgress;
+                    float s=closing?(0.90f+0.10f*p):(0.88f+0.12f*(1f-(float)Math.Pow(1f-p,3)*(float)Math.Cos(p*Math.PI*1.4f)));
+                    float lw=ClientSize.Width/dpiScale,lh=ClientSize.Height/dpiScale;
+                    float cx=lw/2f,cy=lh*0.85f;
+                    g.InterpolationMode=InterpolationMode.HighQualityBicubic;
+                    g.TranslateTransform(cx,cy);g.ScaleTransform(s,s);g.TranslateTransform(-cx,-cy);
+                    g.DrawImage(snap,new RectangleF(0f,0f,lw,lh));
+                }
+            }else{
+                if(canAnimatePage&&mode=="reveal"){
+                    float lw=ClientSize.Width/dpiScale,lh=ClientSize.Height/dpiScale;
+                    float h=24f+(lh-24f)*animationProgress,w=lw*(0.65f+0.35f*animationProgress);
+                    using(var clipPath=VisualDesign.RoundRect((lw-w)/2f,lh-h,w,h,24f))g.SetClip(clipPath,CombineMode.Intersect);
+                }
+                float pageAnim=1f;
+                if(navigation.Page==PopupPage.Folia)pageAnim=(mode=="bounce"&&!closing)?rawMotionProgress:animationProgress;
+                PaintPageRaw(g,pageAnim);
+            }
+            g.Restore(saved);
+        }
+        void PaintPageRaw(Graphics g,float foliaAnimProgress) {
+            if(navigation.Page!=PopupPage.Main){g.TranslateTransform(8*(1-pageProgress),0);PopupPages.Paint(g,owner,navigation,ControlsForPage(),Style.Dark,hoverAction,pressedAction,keyboardFocusVisible?keyboardFocus:-1,navigation.Page==PopupPage.Folia?foliaAnimProgress:1f);}
             else if(MainUsesDeviceLayout)CompactRenderer.PaintWireless(g,owner,MainWireless(),Style.Dark,Feedback(),batteryProgress);
             else VisualDesign.PaintDevicesPanel(g,owner.Current,owner.LastGood,owner.ErrorMessage,owner.IsRefreshing,owner.Dpi,owner.DpiError,owner.IsDpiRefreshing,Style.Dark,displayHeadset,displayAudio,animationProgress,hoverStage,hoverRefresh,headsetProgress,hoverAudio,Feedback(),hoverSettings,batteryProgress);
-            g.Restore(saved);
         }
         bool RenderLayeredFrame() {
             var feedback=Feedback();DateTime now=DateTime.UtcNow;
@@ -821,7 +885,7 @@ namespace AtkBatteryTray {
             visible.Append('|').Append(navigation.TrayGroupKey).Append('|').Append(navigation.TrayHint).Append('|').Append(preferences.AutoCreateTrayGroups).Append('|').Append(preferences.TrayBrandColor).Append('|').Append(preferences.TrayHideWhenDisconnected);
             visible.Append('|').Append(preferences.LowBatteryVoice);
             int foliaAnimStep=navigation.FoliaAnimTick==0?0:unchecked(Environment.TickCount-navigation.FoliaAnimTick);
-            visible.Append('|').Append(preferences.FoliaEnabled).Append('|').Append(preferences.FoliaLyricsEnabled).Append('|').Append(preferences.FoliaTaskbarMode).Append('|').Append(owner.FoliaRenderKey).Append('|').Append(navigation.FoliaVolumeOpen).Append('|').Append(navigation.FoliaPlaylistsOpen).Append('|').Append(navigation.FoliaSeekPreview.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)).Append('|').Append(navigation.FoliaVolumePreview.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)).Append('|').Append(navigation.FoliaAnimActionId).Append('|').Append(foliaAnimStep);
+            visible.Append('|').Append(preferences.MenuAnimation).Append('|').Append(preferences.FoliaEnabled).Append('|').Append(preferences.FoliaLyricsEnabled).Append('|').Append(preferences.FoliaTaskbarMode).Append('|').Append(owner.FoliaRenderKey).Append('|').Append(navigation.FoliaVolumeOpen).Append('|').Append(navigation.FoliaPlaylistsOpen).Append('|').Append(navigation.FoliaSeekPreview.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)).Append('|').Append(navigation.FoliaVolumePreview.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)).Append('|').Append(navigation.FoliaAnimActionId).Append('|').Append(foliaAnimStep);
             foreach(var group in preferences.TrayGroups){visible.Append('|').Append(group.Id).Append('|').Append(group.Name).Append('|').Append(group.Source).Append('|').Append(group.DeviceId).Append('|').Append(group.BrandColor).Append('|').Append(group.HideWhenDisconnected);foreach(string id in group.Members)visible.Append('|').Append(id);}
             if(owner.Audio!=null)visible.Append('|').Append(owner.Audio.OutputVolumePercent).Append('|').Append(owner.Audio.VolumeEndpointId);
             if(owner.Audio!=null&&owner.Audio.Devices!=null)foreach(var device in owner.Audio.Devices)visible.Append('|').Append(device.Id).Append('|').Append(device.Name).Append('|').Append(device.FormFactor);

@@ -11,6 +11,13 @@ namespace AtkBatteryTray {
         internal static string Name(string layout){return Names[Array.IndexOf(Keys,Normalize(layout))];}
         internal static string Effective(string layout){return Normalize(layout);}
     }
+    internal static class MenuAnimations {
+        internal static readonly string[] Keys={"staggered","spring","reveal","fade","bounce"};
+        internal static readonly string[] Names={"错峰上滑","灵动弹出","水滴展开","轻柔淡入","弹性上浮"};
+        internal static string Normalize(string value){return Array.IndexOf(Keys,value)<0?"staggered":value;}
+        internal static string Name(string value){return Names[Array.IndexOf(Keys,Normalize(value))];}
+        internal static string Current{get{return Normalize(DeviceSettings.Current.MenuAnimation);}}
+    }
     // Shared logical geometry: rendering and hit testing must use the same layout.
     public static class VisualDesign {
         internal static bool RingLayout {get{return PanelLayouts.Effective(DeviceSettings.Current.PanelLayout)=="ring";}}

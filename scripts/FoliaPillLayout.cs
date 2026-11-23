@@ -75,39 +75,18 @@ namespace AtkBatteryTray {
             return controls;
         }
 
-        internal static void Paint(Graphics g, TrayContext owner, PopupNavigation nav, List<PopupControl> controls, bool dark, int hover, int pressed, int focus) {
-            var fs = owner.FoliaState;
-            if (fs == null) return;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        static GraphicsState ApplyPillTransform(Graphics g, float slideY) {
+            if (Math.Abs(slideY) < 0.01f) return null;
+            GraphicsState state = g.Save();
+            g.TranslateTransform(0f, slideY);
+            return state;
+        }
 
-            Color pillBg = dark ? Color.FromArgb(248, 38, 38, 42) : Color.FromArgb(252, 255, 255, 255);
-            Color pillBorder = dark ? Color.FromArgb(65, 255, 255, 255) : Color.FromArgb(28, 0, 0, 0);
-            Color fg = dark ? Color.FromArgb(242, 242, 245) : Color.FromArgb(24, 24, 27);
-            Color muted = dark ? Color.FromArgb(165, 165, 172) : Color.FromArgb(115, 115, 122);
-            Color subtle = dark ? Color.FromArgb(46, 255, 255, 255) : Color.FromArgb(24, 0, 0, 0);
-            Color hoverBg = dark ? Color.FromArgb(28, 255, 255, 255) : Color.FromArgb(16, 0, 0, 0);
-            Color pressBg = dark ? Color.FromArgb(42, 255, 255, 255) : Color.FromArgb(28, 0, 0, 0);
-            Color accent = dark ? Color.FromArgb(96, 205, 255) : Color.FromArgb(0, 120, 212);
-            Color heartRed = Color.FromArgb(229, 72, 77);
-            Color trackBg = dark ? Color.FromArgb(64, 64, 70) : Color.FromArgb(232, 232, 236);
-            Color trackFill = dark ? Color.FromArgb(242, 242, 245) : Color.FromArgb(24, 24, 27);
-
-            float yOff = nav.FoliaPlaylistsOpen ? PlaylistOverlayOffset : 0f;
-            var topPill = new RectangleF(TopPillRect.X, TopPillRect.Y + yOff, TopPillRect.Width, TopPillRect.Height);
-            var mainPill = new RectangleF(MainPillRect.X, MainPillRect.Y + yOff, MainPillRect.Width, MainPillRect.Height);
-            DrawPillSurface(g, topPill, 19f, pillBg, pillBorder, dark);
-            DrawPillSurface(g, mainPill, 39f, pillBg, pillBorder, dark);
-
-            if (!nav.FoliaVolumeOpen) {
-                float divX = topPill.X + 12 + 7 * 28 + 4.5f;
-                using (var divPen = new Pen(subtle, 1f))
-                    g.DrawLine(divPen, divX, topPill.Y + 11, divX, topPill.Bottom - 11);
-            }
-
+        static void PaintPillControls(Graphics g, FoliaState fs, PopupNavigation nav, List<PopupControl> controls, bool mainGroup, bool dark, int hover, int pressed, int focus, Color fg, Color muted, Color hoverBg, Color pressBg, Color accent, Color heartRed) {
             foreach (var c in controls) {
                 if (c.Id == 834 || c.Id >= 2000) continue;
+                bool isMainControl = c.Id == 820 || c.Id == 821 || c.Id == 822 || c.Id == 824 || c.Id == 830;
+                if (isMainControl != mainGroup) continue;
                 bool isHover = hover == c.Id || focus == c.Id;
                 bool isPress = pressed == c.Id;
                 if (c.Id == 826 || c.Id == 827) continue;
@@ -170,6 +149,58 @@ namespace AtkBatteryTray {
                 }
                 if (animState != null) g.Restore(animState);
             }
+        }
+
+        internal static void Paint(Graphics g, TrayContext owner, PopupNavigation nav, List<PopupControl> controls, bool dark, int hover, int pressed, int focus, float animProgress = 1f, string menuAnimation = "staggered") {
+            var fs = owner.FoliaState;
+            if (fs == null) return;
+            float animP = PopupPages.Reduced ? 1f : Math.Max(0f, Math.Min(1f, animProgress));
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+
+            Color pillBg = dark ? Color.FromArgb(248, 38, 38, 42) : Color.FromArgb(252, 255, 255, 255);
+            Color pillBorder = dark ? Color.FromArgb(65, 255, 255, 255) : Color.FromArgb(28, 0, 0, 0);
+            Color fg = dark ? Color.FromArgb(242, 242, 245) : Color.FromArgb(24, 24, 27);
+            Color muted = dark ? Color.FromArgb(165, 165, 172) : Color.FromArgb(115, 115, 122);
+            Color subtle = dark ? Color.FromArgb(46, 255, 255, 255) : Color.FromArgb(24, 0, 0, 0);
+            Color hoverBg = dark ? Color.FromArgb(28, 255, 255, 255) : Color.FromArgb(16, 0, 0, 0);
+            Color pressBg = dark ? Color.FromArgb(42, 255, 255, 255) : Color.FromArgb(28, 0, 0, 0);
+            Color accent = dark ? Color.FromArgb(96, 205, 255) : Color.FromArgb(0, 120, 212);
+            Color heartRed = Color.FromArgb(229, 72, 77);
+            Color trackBg = dark ? Color.FromArgb(64, 64, 70) : Color.FromArgb(232, 232, 236);
+            Color trackFill = dark ? Color.FromArgb(242, 242, 245) : Color.FromArgb(24, 24, 27);
+
+            float yOff = nav.FoliaPlaylistsOpen ? PlaylistOverlayOffset : 0f;
+            var topPill = new RectangleF(TopPillRect.X, TopPillRect.Y + yOff, TopPillRect.Width, TopPillRect.Height);
+            var mainPill = new RectangleF(MainPillRect.X, MainPillRect.Y + yOff, MainPillRect.Width, MainPillRect.Height);
+            float mainSlideY = 0f;
+            float topSlideY = 0f;
+            if (animP < 1f) {
+                if (menuAnimation == "bounce") {
+                    float c1 = 1.70158f;
+                    float t1 = animP - 1f;
+                    float back = 1f + (c1 + 1f) * t1 * t1 * t1 + c1 * t1 * t1;
+                    mainSlideY = (1f - back) * 14f;
+                    topSlideY = (1f - back) * 14f;
+                } else if (menuAnimation == "staggered") {
+                    mainSlideY = (1f - animP) * 12f;
+                    float topT = Math.Max(0f, Math.Min(1f, (animP - 0.10f) / 0.90f));
+                    float topEase = topT * topT * (3f - 2f * topT);
+                    topSlideY = (1f - topEase) * 16f;
+                }
+            }
+
+            GraphicsState topState = ApplyPillTransform(g, topSlideY);
+            DrawPillSurface(g, topPill, 19f, pillBg, pillBorder, dark);
+
+            if (!nav.FoliaVolumeOpen) {
+                float divX = topPill.X + 12 + 7 * 28 + 4.5f;
+                using (var divPen = new Pen(subtle, 1f))
+                    g.DrawLine(divPen, divX, topPill.Y + 11, divX, topPill.Bottom - 11);
+            }
+
+            PaintPillControls(g, fs, nav, controls, false, dark, hover, pressed, focus, fg, muted, hoverBg, pressBg, accent, heartRed);
 
             if (nav.FoliaVolumeOpen) {
                 var volCtrl = controls.Find(c => c.Id == 827);
@@ -198,6 +229,11 @@ namespace AtkBatteryTray {
                         g.DrawString(pct + "%", pf, pb, new RectangleF(volCtrl.Rect.Right + 2, topPill.Y, 34, topPill.Height), sf);
                 }
             }
+            if (topState != null) g.Restore(topState);
+
+            GraphicsState mainState = ApplyPillTransform(g, mainSlideY);
+            DrawPillSurface(g, mainPill, 39f, pillBg, pillBorder, dark);
+            PaintPillControls(g, fs, nav, controls, true, dark, hover, pressed, focus, fg, muted, hoverBg, pressBg, accent, heartRed);
 
             // Title centered between prev (<) and next (>)
             string title = String.IsNullOrEmpty(fs.Title) ? "等待播放" : fs.Title;
@@ -241,10 +277,13 @@ namespace AtkBatteryTray {
                 using (var kb = new SolidBrush(trackFill))
                     g.FillEllipse(kb, kx - 5f, ky - 5f, 10f, 10f);
             }
+            if (mainState != null) g.Restore(mainState);
 
             if (nav.FoliaPlaylistsOpen) {
+                GraphicsState plState = ApplyPillTransform(g, mainSlideY);
                 DrawPillSurface(g, PlaylistOverlayRect, 16f, pillBg, pillBorder, dark);
                 PaintPlaylistsContent(g, owner, controls, PlaylistOverlayRect, 834, dark, hover, pressed, focus);
+                if (plState != null) g.Restore(plState);
             }
         }
 

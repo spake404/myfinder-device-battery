@@ -132,6 +132,7 @@ namespace AtkBatteryTray {
                 rows.Add(Row(229,"布局",PanelLayouts.Name(pref.PanelLayout)));
                 rows.Add(Row(228,"字号",pref.FontSize=="large"?"较大":"标准"));
                 rows.Add(Row(211,"托盘图标",(pref.TrayGroups.Count+1)+" 个"));
+                rows.Add(Row(235,"菜单动效",MenuAnimations.Name(pref.MenuAnimation)));
                 rows.Add(Toggle(215,"减弱动效",pref.ReducedMotion));
                 rows.Add(Section("提醒"));rows.Add(Toggle(212,"低电量提醒",pref.LowBatteryNotifications));
                 var voice=Toggle(LowBatteryVoice.ToggleId,"合成语音提醒",pref.LowBatteryNotifications&&pref.LowBatteryVoice);
@@ -191,6 +192,7 @@ namespace AtkBatteryTray {
                 else if(nav.PreferenceAction==223){labels=new[]{"海蓝","原生","琥珀","青雾"};first=440;selected=Array.IndexOf(ThemePalette.Keys,ThemePalette.Normalize(pref.ThemeStyle));}
                 else if(nav.PreferenceAction==228){labels=new[]{"标准","较大"};first=460;selected=pref.FontSize=="large"?1:0;}
                 else if(nav.PreferenceAction==229){labels=PanelLayouts.Names;first=470;selected=Array.IndexOf(PanelLayouts.Keys,PanelLayouts.Normalize(pref.PanelLayout));}
+                else if(nav.PreferenceAction==235){labels=MenuAnimations.Names;first=480;selected=Array.IndexOf(MenuAnimations.Keys,MenuAnimations.Normalize(pref.MenuAnimation));}
                 else if(nav.PreferenceAction==224){labels=new[]{TrayConfiguration.IconPresetName};first=450;selected=0;}
                 else if(nav.PreferenceAction==811){labels=FoliaModes.Names;first=812;selected=FoliaModes.Normalize(pref.FoliaTaskbarMode)=="compact"?0:1;}
                 else if(nav.PreferenceAction==211){labels=new[]{"当前使用的设备","最低电量","自动选择有数据的设备","鼠标优先","耳机优先","键盘优先"};first=410;selected=pref.TraySource=="active"?0:pref.TraySource=="lowest"?1:pref.TraySource=="auto"?2:pref.TraySource=="mouse"?3:pref.TraySource=="headset"?4:5;}
@@ -550,7 +552,7 @@ namespace AtkBatteryTray {
             if(nav.Page==PopupPage.FoliaPlaylists)return "收藏到歌单";
             if(nav.Page==PopupPage.ManageDevice)return "显示与排序";
             if(nav.Page==PopupPage.Device)return "设备详情";
-            if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==223?"配色":nav.PreferenceAction==229?"布局":nav.PreferenceAction==228?"字号":nav.PreferenceAction==224?"图标样式":nav.PreferenceAction==211?"显示规则":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
+            if(nav.Page==PopupPage.ChoosePreference)return nav.PreferenceAction==210?"外观":nav.PreferenceAction==223?"配色":nav.PreferenceAction==229?"布局":nav.PreferenceAction==235?"菜单动效":nav.PreferenceAction==228?"字号":nav.PreferenceAction==224?"图标样式":nav.PreferenceAction==211?"显示规则":nav.PreferenceAction==213?"提醒阈值":"后台同步间隔";
             switch(nav.Page){case PopupPage.More:return "更多选项";case PopupPage.Audio:return "音源与麦克风";case PopupPage.Preferences:return "显示与提醒";case PopupPage.Mouse:return "鼠标详情";case PopupPage.Headset:return "耳机详情";case PopupPage.Bindings:return "按钮绑定";case PopupPage.PickBinding:return nav.BindingRole=="speaker"?"选择扬声器":nav.BindingRole=="headset"?"选择耳机":"选择麦克风";default:return "状态与诊断";}
         }
         internal static RectangleF VolumeTrack(RectangleF row){return row.Height<=VisualDesign.SystemVolumeHeight?VisualDesign.MainVolumeTrack(row):new RectangleF(row.X+17,row.Y+(VisualDesign.LargeFont?38:33),row.Width-34,VisualDesign.VolumeTrackHeight);}
@@ -595,9 +597,9 @@ namespace AtkBatteryTray {
                 }
             }
         }
-        internal static void Paint(Graphics g,TrayContext owner,PopupNavigation nav,List<PopupControl> controls,bool dark,int hover,int pressed,int focus) {
+        internal static void Paint(Graphics g,TrayContext owner,PopupNavigation nav,List<PopupControl> controls,bool dark,int hover,int pressed,int focus,float animProgress=1f) {
             if(nav.Page==PopupPage.Folia&&controls.Count>0&&(controls[0].LayoutKey=="folia:pill"||controls[0].LayoutKey=="folia:pill:playlists")){
-                FoliaPillLayout.Paint(g,owner,nav,controls,dark,hover,pressed,focus);
+                FoliaPillLayout.Paint(g,owner,nav,controls,dark,hover,pressed,focus,animProgress,MenuAnimations.Current);
                 return;
             }
             if(nav.Page==PopupPage.FoliaQueue&&controls.Count>0&&controls[0].LayoutKey=="folia:queue"){
@@ -688,6 +690,7 @@ namespace AtkBatteryTray {
                     if(!String.IsNullOrEmpty(row.LayoutKey))PaintLayoutPreview(g,row.LayoutKey,LayoutPreviewRect(rect),dark);
                     if(row.Selected)VisualDesign.DrawSymbol(g,"check",new RectangleF(rect.Right-22,rect.Y+(float)Math.Floor((rect.Height-14)/2),14,14),themeChoice?blue:palette.SelectedForeground);
                     else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=224||row.Id==228||row.Id==229||row.Id>=230&&row.Id<=232||row.Id==7||row.Id==8||row.Id>=1000&&row.ActionKey!="tray:member"&&row.ActionKey!="tray:group-pin"||row.ActionKey=="tray:group"||row.ActionKey=="tray:rename"||row.ActionKey=="tray:rules"||row.ActionKey=="tray:members")VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(float)Math.Floor((rect.Height-12)/2),12,12),detailColor);
+                    else if(row.Id==2||row.Id==3||row.Id>=200&&row.Id<=203||row.Id==206||row.Id==207||row.Id==210||row.Id==211||row.Id==213||row.Id==216||row.Id>=220&&row.Id<=224||row.Id==228||row.Id==229||row.Id>=230&&row.Id<=232||row.Id==235||row.Id==7||row.Id==8||row.Id>=1000&&row.ActionKey!="tray:member"&&row.ActionKey!="tray:group-pin"||row.ActionKey=="tray:group"||row.ActionKey=="tray:rename"||row.ActionKey=="tray:rules"||row.ActionKey=="tray:members")VisualDesign.DrawSymbol(g,row.Id==7?"back":"chevron",new RectangleF(rect.Right-18,rect.Y+(float)Math.Floor((rect.Height-12)/2),12,12),detailColor);
                 }
                 },viewport:row.Viewport);
             }

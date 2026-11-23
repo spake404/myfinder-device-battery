@@ -80,8 +80,9 @@ namespace AtkBattery {
         [DataMember(Order=37)] public bool FoliaEnabled=true;
         [DataMember(Order=38)] public string FoliaTaskbarMode="controls";
         [DataMember(Order=39)] public bool FoliaLyricsEnabled;
+        [DataMember(Order=40)] public string MenuAnimation="staggered";
         [OnDeserializing] void Defaults(StreamingContext context) {
-            Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;
+            Theme="auto";ThemeStyle="ocean";FontSize="normal";PanelLayout="ring";MenuAnimation="staggered";TraySource="mouse";VolumeCollapsed=false;RememberReadings=true;WarningThreshold=20;AutoCheckUpdates=true;ShowUpdateBadge=true;CheckFeedbackReplies=true;IncludeBetaUpdates=true;
             MouseAlias="ATK A9 Air+";HeadsetAlias="HyperX Cloud Alpha";BackgroundSeconds=60;
             DeviceAliases=new Dictionary<string,string>();
             HiddenDeviceIds=new List<string>();DeviceOrder=new List<string>();AudioDeviceBindings=new Dictionary<string,AudioEndpointBindings>();
@@ -93,7 +94,7 @@ namespace AtkBattery {
             var copy=new AudioBindings { SchemaVersion=SchemaVersion,
                 SpeakerEndpointId=SpeakerEndpointId, HeadsetEndpointId=HeadsetEndpointId,
                 MicrophoneEndpointId=MicrophoneEndpointId, TraySource=TraySource,TrayDeviceId=TrayDeviceId,
-                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ThemeStyle=ThemeStyle,FontSize=FontSize,PanelLayout=PanelLayout,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,AutoCheckUpdates=AutoCheckUpdates,ShowUpdateBadge=ShowUpdateBadge,CheckFeedbackReplies=CheckFeedbackReplies,IncludeBetaUpdates=IncludeBetaUpdates,
+                LowBatteryNotifications=LowBatteryNotifications,Theme=Theme,ThemeStyle=ThemeStyle,FontSize=FontSize,PanelLayout=PanelLayout,MenuAnimation=MenuAnimation,ReducedMotion=ReducedMotion,VolumeCollapsed=VolumeCollapsed,AutoCheckUpdates=AutoCheckUpdates,ShowUpdateBadge=ShowUpdateBadge,CheckFeedbackReplies=CheckFeedbackReplies,IncludeBetaUpdates=IncludeBetaUpdates,
                 RememberReadings=RememberReadings,WarningThreshold=WarningThreshold,MouseAlias=MouseAlias,
                 HeadsetAlias=HeadsetAlias,BackgroundSeconds=BackgroundSeconds,DeviceAliases=DeviceAliases==null?new Dictionary<string,string>():new Dictionary<string,string>(DeviceAliases),
                 HiddenDeviceIds=HiddenDeviceIds==null?new List<string>():new List<string>(HiddenDeviceIds),DeviceOrder=DeviceOrder==null?new List<string>():new List<string>(DeviceOrder),ExplicitAudioBindingsOnly=ExplicitAudioBindingsOnly };
@@ -210,6 +211,7 @@ namespace AtkBattery {
             if(settings.Theme!="auto"&&settings.Theme!="light"&&settings.Theme!="dark")throw new InvalidDataException("Unknown theme");
             settings.ThemeStyle=AtkBatteryTray.ThemePalette.Normalize(settings.ThemeStyle);
             settings.PanelLayout=AtkBatteryTray.PanelLayouts.Normalize(settings.PanelLayout);
+            settings.MenuAnimation=AtkBatteryTray.MenuAnimations.Normalize(settings.MenuAnimation);
             settings.FontSize=settings.FontSize=="large"?"large":"normal";
             settings.FoliaTaskbarMode=settings.FoliaTaskbarMode=="compact"?"compact":"controls";
             TrayConfiguration.Normalize(settings);
@@ -252,6 +254,7 @@ namespace AtkBattery {
                 catch(XmlException error){throw new SerializationException("Invalid audio settings JSON",error);}
                 // A malformed layout value must not discard the other settings.
                 while(document.DocumentElement["PanelLayout"]!=null&&document.DocumentElement["PanelLayout"].GetAttribute("type")!="string")document.DocumentElement.RemoveChild(document.DocumentElement["PanelLayout"]);
+                while(document.DocumentElement["MenuAnimation"]!=null&&document.DocumentElement["MenuAnimation"].GetAttribute("type")!="string")document.DocumentElement.RemoveChild(document.DocumentElement["MenuAnimation"]);
                 while(document.DocumentElement["UseTaskbarStrip"]!=null&&document.DocumentElement["UseTaskbarStrip"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["UseTaskbarStrip"]);
                 while(document.DocumentElement["LowBatteryVoice"]!=null&&document.DocumentElement["LowBatteryVoice"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["LowBatteryVoice"]);
                 while(document.DocumentElement["TrayHideWhenDisconnected"]!=null&&document.DocumentElement["TrayHideWhenDisconnected"].GetAttribute("type")!="boolean")document.DocumentElement.RemoveChild(document.DocumentElement["TrayHideWhenDisconnected"]);

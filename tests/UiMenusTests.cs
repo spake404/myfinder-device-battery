@@ -105,7 +105,7 @@ static class UiMenusTests {
     }
     static void PreferenceOrder(){
         using(var f=new Fixture()){
-            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|布局|字号|托盘图标|减弱动效|提醒|低电量提醒|合成语音提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","voice reminder appears directly under the low-battery notification toggle");
+            Check(Texts(Rows(f.Owner,PopupPage.Preferences))=="显示|外观|配色|布局|字号|托盘图标|菜单动效|减弱动效|提醒|低电量提醒|合成语音提醒|提醒阈值|数据|后台同步间隔|跨重启保留读数|清除历史读数|更新|自动检查更新|托盘图标显示更新角标|提醒测试版更新|自动检查反馈回复","voice reminder appears directly under the low-battery notification toggle");
             f.Page(PopupPage.Preferences);var toggle=f.Find("自动检查反馈回复");Check(toggle.Id==226&&toggle.Checked,"feedback checking defaults on in the settings page");f.Activate(toggle);
             Check(!DeviceSettings.Current.CheckFeedbackReplies&&f.Saves==1,"feedback checking toggle uses the existing configuration writer");
             var beta=f.Find("提醒测试版更新");Check(beta.Id==227&&beta.Checked,"beta update reminders default on in the settings page");f.Activate(beta);
@@ -125,6 +125,12 @@ static class UiMenusTests {
             f.Activate(f.Find("低电量提醒"));
             voice=f.Find("合成语音提醒");
             Check(!voice.Enabled&&!voice.Checked&&DeviceSettings.Current.LowBatteryVoice,"the master switch silences voice without forgetting the preference");
+            f.Activate(f.Find("菜单动效"));
+            Check(f.Navigation.Page==PopupPage.ChoosePreference&&f.Navigation.PreferenceAction==235,"menu animation opens its chooser");
+            f.Activate(f.Find("灵动弹出"));
+            Check(DeviceSettings.Current.MenuAnimation=="spring"&&f.Navigation.Page==PopupPage.Preferences,"choosing a menu animation updates MenuAnimation and returns");
+            f.Activate(f.Find("菜单动效"));f.Activate(f.Find("错峰上滑"));
+            Check(DeviceSettings.Current.MenuAnimation=="staggered","choosing default menu animation restores staggered");
         }
     }
     static bool IsInteger(float value){return Math.Abs(value-(float)Math.Round(value))<.001f;}
