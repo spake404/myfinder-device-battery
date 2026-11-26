@@ -1,12 +1,14 @@
 {
   "folium": 1,
   "id": "myfinder-folia-bridge",
-  "name": "MyFinder 设备电量联动桥接",
+  "name": "MyFinder 任务栏音乐与设备电量显示",
   "version": "1.0.0",
   "author": "spake404",
-  "description": "将 Folia 的播放状态、实时歌词、播放队列与控制指令桥接到 MyFinder Device Battery 任务栏与控制面板。",
+  "description": "将 Folia 的播放状态、实时歌词、播放队列、歌单收藏与控制指令桥接到 MyFinder 任务栏音乐控制栏与悬浮双胶囊面板，与无线外设电量同栏显示。",
   "main": "main.cjs",
   "client": "client.mjs",
+  "preview": "preview.png",
+  "folia": ">=0.7.22",
   "permissions": [
     "playback.read",
     "playback.control",
